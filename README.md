@@ -4,7 +4,7 @@ Claude Code 的 mod（plugin）marketplace。目前收錄一個 mod：
 
 | Mod | 說明 |
 | --- | --- |
-| [`saymend-voice`](./saymend-voice) | 用 Saymend 本機語音輸入，並以系統語音朗讀 Claude 的回覆 |
+| [`saymend-voice`](./mods/saymend-voice) | 用 Saymend 本機語音輸入，並以系統語音朗讀 Claude 的回覆 |
 
 ## 安裝
 
@@ -69,6 +69,6 @@ mod 只透過 `saymend` CLI 跟 Saymend 互動，契約見 Saymend repo 的 `doc
 ### 開發
 
 ```
-claude plugin validate saymend-voice
-claude plugin test saymend-voice
+claude plugin validate mods/saymend-voice
+claude plugin test mods/saymend-voice
 ```

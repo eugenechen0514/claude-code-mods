@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "saymend-voice",
-      "source": "./saymend-voice",
+      "source": "./mods/saymend-voice",
       "description": "用 Saymend 本機語音輸入，並以系統語音朗讀 Claude 的回覆"
     }
   ]
