@@ -12,7 +12,7 @@ In a Claude Code session in the terminal, enter:
 /plugin install saymend-voice --marketplace eugenechen0514/claude-code-mods
 ```
 
-For other ways to install and the access requirements, see the [marketplace README](../../README.md).
+For other ways to install, see the [marketplace README](../../README.md).
 
 ## Requirements
 

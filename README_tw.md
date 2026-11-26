@@ -28,8 +28,6 @@ claude plugin install <mod> --marketplace eugenechen0514/claude-code-mods
 
 在桌面版 app（`/plugin` 無法使用時）：點輸入框旁的 +，選 Plugins，用 `eugenechen0514/claude-code-mods` 新增 marketplace，再新增 plugin。
 
-這是 private repository：只有在 GitHub 上讀得到它、而且機器上已經有 github.com git 憑證（SSH key，或 `gh auth login` 後執行 `gh auth setup-git`）的人才能安裝，安裝過程不會跳出登入提示。
-
 ## 新增 mod
 
 1. 在 `mods/<mod>/` 放入 mod 的檔案與 README（英文 `README.md`、中文 `README_tw.md`）。

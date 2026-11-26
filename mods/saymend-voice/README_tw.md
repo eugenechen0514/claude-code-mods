@@ -12,7 +12,7 @@
 /plugin install saymend-voice --marketplace eugenechen0514/claude-code-mods
 ```
 
-其他安裝方式與存取權限說明，見 [marketplace 的 README](../../README_tw.md)。
+其他安裝方式見 [marketplace 的 README](../../README_tw.md)。
 
 ## 需求
 

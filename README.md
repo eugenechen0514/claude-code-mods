@@ -28,8 +28,6 @@ claude plugin install <mod> --marketplace eugenechen0514/claude-code-mods
 
 In the desktop app (where `/plugin` is not available): click + next to the prompt box, choose Plugins, add the marketplace `eugenechen0514/claude-code-mods`, then add the plugin.
 
-This is a private repository: only people who can read it on GitHub and whose machine already has github.com git credentials (an SSH key, or `gh auth setup-git` after `gh auth login`) can install from it. No login prompt appears during installation.
-
 ## Adding a mod
 
 1. Put the mod's files and READMEs in `mods/<mod>/` (English `README.md`, Traditional Chinese `README_tw.md`).
