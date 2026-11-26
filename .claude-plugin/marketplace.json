@@ -1,0 +1,11 @@
+{
+  "name": "claude-code-modes",
+  "owner": { "name": "eugenechen0514" },
+  "plugins": [
+    {
+      "name": "saymend-voice",
+      "source": "./saymend-voice",
+      "description": "用 Saymend 本機語音輸入，並以系統語音朗讀 Claude 的回覆"
+    }
+  ]
+}
