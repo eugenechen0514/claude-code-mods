@@ -28,6 +28,7 @@ The mod talks to Saymend only through the `saymend` CLI; the contract is in `doc
 | --- | --- |
 | `/listen` | Dictate one utterance and send it as soon as you pause |
 | `/listen edit` | Dictate and only fill the prompt box, without sending |
+| `/saymend`, `/saymend listen [edit]` | The same as `/listen [edit]`; `/saymend` with no arguments dictates and sends |
 | `/saymend off` | Turn voice off (default) |
 | `/saymend speak` | Read each reply aloud when it finishes |
 | `/saymend loop` | After reading a reply, listen automatically and send what you say; say 「停止語音」 ("stop voice") to end the loop |

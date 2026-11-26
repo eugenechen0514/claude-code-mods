@@ -509,3 +509,28 @@ test('朗讀開著時，送出的 prompt 會附上「不要自行發聲」的說
   expect(seen.contexts[0]?.[0]).toContain('不要自行執行 `say`')
   expect(seen.contexts[1]).toEqual([])
 })
+
+test('/saymend 不帶參數與 /saymend listen 都等同 /listen；listen edit 只填進輸入框', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on, {
+    dictate: { lines: ['{"v":1,"type":"final","text":"幫我看這個錯誤"}'], code: 0 },
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'saymend', args: '' })
+  await clock.settle()
+  expect(seen.submitted).toEqual([{ text: '幫我看這個錯誤', asUser: true }])
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'listen' })
+  await clock.settle()
+  expect(seen.submitted.length).toBe(2)
+  expect(seen.filled).toEqual([])
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'listen edit' })
+  await clock.settle()
+  expect(seen.filled).toEqual(['幫我看這個錯誤'])
+  expect(seen.submitted.length).toBe(2)
+
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain('模式：off')
+})

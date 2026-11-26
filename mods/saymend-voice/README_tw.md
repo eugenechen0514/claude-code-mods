@@ -28,6 +28,7 @@ mod 只透過 `saymend` CLI 跟 Saymend 互動，契約見 Saymend repo 的 `doc
 | --- | --- |
 | `/listen` | 聽寫一段話，說完停頓後直接送出 |
 | `/listen edit` | 聽寫後只填進輸入框，不送出 |
+| `/saymend`、`/saymend listen [edit]` | 等同 `/listen [edit]`；`/saymend` 不帶參數就是聽寫並送出 |
 | `/saymend off` | 關閉語音（預設） |
 | `/saymend speak` | 每次回覆結束後朗讀 |
 | `/saymend loop` | 朗讀後自動聆聽，說完自動送出；說「停止語音」可結束迴圈 |

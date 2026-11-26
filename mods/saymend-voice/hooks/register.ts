@@ -39,7 +39,8 @@ const RETRY_MAX_MS = 60_000
 const KILLED: ProcessSpawnResult = { code: null, signal: 'SIGTERM' }
 
 const USAGE = [
-  '用法：/saymend [off|speak|loop|stop|status]',
+  '用法：/saymend [listen [edit]]　聽寫一段話並送出（不帶參數就是這個；/listen 是同一個動作）',
+  '　　　/saymend off|speak|loop|stop|status',
   '　　　/saymend pause <秒>　　停頓多久視為說完（0.5–10，預設 1.5）',
   '　　　/saymend max <秒>　　　單段最長可以講多久（10–3600，預設 120）',
   '　　　/saymend bargein <on|off>　邊唸邊聽（需戴耳機）',
@@ -410,19 +411,38 @@ async function saymendStatus($: EngineInterface): Promise<string> {
   }
 }
 
+/**
+ * `/listen` 與 `/saymend listen` 共用：開始聽寫一段話。
+ * 不等聽寫結束就回傳，結果由 `listen` 自己送出或填入輸入框。
+ */
+function beginListening($: EngineInterface, args: string): { text?: string } {
+  if (listening !== null) {
+    return { text: '已經在聆聽中。' }
+  }
+  // 預設說完就送出；`edit` 只填入輸入框，讓人改完再自己按 Enter
+  const submit = !/(^|\s)(edit|編輯)(\s|$)/.test(args)
+  void listen($, { submit, handsFree: false }).catch(error => {
+    $.ui.toast(`聽寫失敗：${describe(error)}`)
+  })
+
+  return {}
+}
+
 export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     await load($)
     await $.command.register({
       name: 'saymend',
-      description: '語音模式：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
-      argumentHint: '[off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off]',
+      description:
+        '不帶參數：聽寫一段話並送出（同 /listen）。語音模式：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
+      argumentHint:
+        '[listen [edit]|off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off]',
       immediate: true,
     })
     await $.command.register({
       name: 'listen',
-      description: '用 Saymend 聽寫一段話並直接送出（加 edit 只填入輸入框，不送出）',
+      description: '用 Saymend 聽寫一段話並直接送出（加 edit 只填入輸入框，不送出；同 /saymend listen）',
       argumentHint: '[edit]',
     })
     if (mode !== 'off') {
@@ -435,8 +455,13 @@ export const register: Register = on => {
 
   on('command.run', { command: 'saymend' }, async ($, e) => {
     await load($)
-    const [verb = 'status', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
+    // 不帶參數就是聽寫：最常用的動作放在最短的入口
+    const [verb = 'listen', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     const value = rest.join(' ')
+
+    if (verb === 'listen') {
+      return beginListening($, value)
+    }
 
     if (verb === 'off' || verb === 'speak' || verb === 'loop') {
       await setMode($, verb)
@@ -542,16 +567,8 @@ export const register: Register = on => {
 
   on('command.run', { command: 'listen' }, async ($, e) => {
     await load($)
-    if (listening !== null) {
-      return { text: '已經在聆聽中。' }
-    }
-    // 預設說完就送出；`edit` 只填入輸入框，讓人改完再自己按 Enter
-    const submit = !/(^|\s)(edit|編輯)(\s|$)/.test(e.args)
-    void listen($, { submit, handsFree: false }).catch(error => {
-      $.ui.toast(`聽寫失敗：${describe(error)}`)
-    })
 
-    return {}
+    return beginListening($, e.args)
   })
 
   // 使用者送出新的 prompt：正在唸的上一則回覆就不用唸完了
