@@ -49,6 +49,7 @@ mod 只透過 `saymend` CLI 跟 Saymend 互動，契約見 Saymend repo 的 `doc
 - 聆聽期間按 Esc 會被 Saymend 接走，用來取消這次聆聽，Claude Code 收不到；按 Saymend 熱鍵則是提早定稿送出。
 - 聽寫預設不做 LLM 潤飾，只有本機 ASR 加上簡轉繁與詞彙表後處理；開啟 `polish` 才會走 Saymend 設定的 provider。
 - 邊唸邊聽只適合戴耳機時使用，否則喇叭的聲音會被當成有人說話。
+- `speak` 或 `loop` 開著時，每則 prompt 會附一段只有 model 看得到的說明，請它不要自己執行 `say` 或其他發聲指令。這樣你自己的指示（例如 `CLAUDE.md`）要求的語音完成通知，就不會和朗讀重複。
 
 ## 開發
 

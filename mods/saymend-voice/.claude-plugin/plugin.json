@@ -1,5 +1,5 @@
 {
   "name": "saymend-voice",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "用 Saymend 本機語音輸入，並以系統語音朗讀 Claude 的回覆"
 }

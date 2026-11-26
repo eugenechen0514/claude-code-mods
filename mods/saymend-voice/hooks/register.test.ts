@@ -59,6 +59,8 @@ test('isStopPhrase 只認整句的停止指令', async () => {
 type World = {
   spoken: string[]
   submitted: { text: string; asUser?: boolean }[]
+  /** 每則送進去的 prompt 旁，附給 model 看的 context（沒有就是空陣列） */
+  contexts: string[][]
   filled: string[]
   toasts: string[]
   spawned: string[][]
@@ -92,6 +94,7 @@ function world(
   const seen: World = {
     spoken: [],
     submitted: [],
+    contexts: [],
     filled: [],
     toasts: [],
     spawned: [],
@@ -127,6 +130,7 @@ function world(
       text: e.text,
       asUser: e.origin.kind === 'plugin' ? e.origin.asUser : undefined,
     })
+    seen.contexts.push([...(e.context ?? [])])
 
     return script.drop === undefined ? { text: e.text } : { drop: script.drop }
   })
@@ -487,4 +491,21 @@ test('/saymend polish on 之後聽寫會帶 --polish，off 則不帶', async ($,
   expect(seen.spawned.filter(argv => argv[1] === 'dictate').at(-1)?.includes('--polish')).toBe(
     false,
   )
+})
+
+test('朗讀開著時，送出的 prompt 會附上「不要自行發聲」的說明；off 與斜線指令不附', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.prompt.submit({ text: '幫我跑測試', wait: false, origin: { kind: 'composer' } })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+  await $.prompt.submit({ text: '再跑一次', wait: false, origin: { kind: 'composer' } })
+  await clock.settle()
+
+  expect(seen.contexts).toHaveLength(2)
+  expect(seen.contexts[0]).toHaveLength(1)
+  expect(seen.contexts[0]?.[0]).toContain('不要自行執行 `say`')
+  expect(seen.contexts[1]).toEqual([])
 })

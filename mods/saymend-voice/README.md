@@ -49,6 +49,7 @@ Settings are kept in the mod's own store and persist across sessions.
 - While listening, Esc is taken by Saymend to cancel this listening, and Claude Code does not receive it; pressing the Saymend hotkey finalizes and sends early.
 - Dictation is not polished by an LLM by default: only local ASR plus Simplified-to-Traditional conversion and vocabulary post-processing. Turning `polish` on uses the provider configured in Saymend.
 - Barge-in is only suitable with headphones; otherwise the speaker's sound is taken as someone speaking.
+- While `speak` or `loop` is on, each prompt carries a note (visible only to the model) asking it not to run `say` or other sound-making commands itself, so a spoken completion notice required by your own instructions (for example in `CLAUDE.md`) does not double up with the reading.
 
 ## Development
 

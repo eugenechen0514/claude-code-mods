@@ -73,6 +73,15 @@ let saymendState = 'unknown'
 /** Saymend 正在處理一段聽寫的狀態（契約 v1 的 `state`）。 */
 const BUSY_STATES: ReadonlySet<string> = new Set(['recording', 'transcribing', 'polishing'])
 
+/**
+ * 朗讀開著時附在每則 prompt 旁、只給 model 看的說明：
+ * 回覆會由這個 mod 唸出來，model 不必（也不該）再自己執行發聲指令。
+ */
+const SPEAKING_NOTICE =
+  '[saymend-voice] 語音朗讀已開啟：這則回覆結束後，saymend-voice 會用系統語音把回覆唸出來。' +
+  '這一回合請不要自行執行 `say` 或其他會發出聲音的指令（包括完成通知的語音），以免重複發聲；' +
+  '這項說明優先於其他要求用語音通知的指示。'
+
 async function load($: EngineInterface): Promise<void> {
   if (isLoaded) {
     return
@@ -546,12 +555,18 @@ export const register: Register = on => {
   })
 
   // 使用者送出新的 prompt：正在唸的上一則回覆就不用唸完了
-  on('prompt.submit', ($, e, next) => {
+  on('prompt.submit', async ($, e, next) => {
     stopSpeaking()
     // 邊唸邊聽時使用者改用打字送出：還沒聽到開口的那段聽寫就不用等了。
     // 斜線指令不算（例如 /saymend status 不該把聆聽取消掉）
     if (e.command === undefined && listening !== null && !listening.hasSpoken) {
       listening.cancel()
+    }
+    await load($)
+    // 朗讀開著時告訴 model 這回合不要自己發聲（例如 CLAUDE.md 規定的 `say` 完成通知），
+    // 否則通知和 mod 的朗讀會重複。context 只有 model 讀得到，使用者看不到
+    if (mode !== 'off' && e.command === undefined) {
+      return next({ ...e, context: [...(e.context ?? []), SPEAKING_NOTICE] })
     }
 
     return next(e)
