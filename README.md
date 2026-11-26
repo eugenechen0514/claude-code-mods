@@ -1,36 +1,38 @@
 # claude-code-mods
 
-Claude Code 的 mod（plugin）marketplace。每個 mod 放在 `mods/` 底下各自的資料夾，說明寫在該資料夾的 README。
+English | [繁體中文](README_tw.md)
 
-## 收錄的 mod
+A marketplace of Claude Code mods (plugins). Each mod lives in its own folder under `mods/`, and its documentation is in that folder's README.
 
-| Mod | 說明 |
+## Mods
+
+| Mod | Description |
 | --- | --- |
-| [`saymend-voice`](./mods/saymend-voice/README.md) | 用 Saymend 本機語音輸入，並以系統語音朗讀 Claude 的回覆 |
+| [`saymend-voice`](./mods/saymend-voice/README.md) | Use Saymend for local voice input and read Claude's replies aloud with the system voice |
 
-## 安裝
+## Installation
 
-在終端機的 Claude Code session 輸入（`<mod>` 換成上表的名稱）：
+In a Claude Code session in the terminal, enter (replace `<mod>` with a name from the table above):
 
 ```
 /plugin install <mod> --marketplace eugenechen0514/claude-code-mods
 ```
 
-接著按 `y` 加入這個 marketplace，再選擇安裝範圍（user scope 會套用到之後的每個 session）。
+Then press `y` to add this marketplace and choose an installation scope (the user scope applies to every session you start afterwards).
 
-也可以從 shell 安裝：
+You can also install from a shell:
 
 ```
 claude plugin install <mod> --marketplace eugenechen0514/claude-code-mods
 ```
 
-在桌面版 app（`/plugin` 無法使用時）：點輸入框旁的 +，選 Plugins，用 `eugenechen0514/claude-code-mods` 新增 marketplace，再新增 plugin。
+In the desktop app (where `/plugin` is not available): click + next to the prompt box, choose Plugins, add the marketplace `eugenechen0514/claude-code-mods`, then add the plugin.
 
-這是 private repository：只有在 GitHub 上讀得到它、而且機器上已經有 github.com git 憑證（SSH key，或 `gh auth login` 後執行 `gh auth setup-git`）的人才能安裝，安裝過程不會跳出登入提示。
+This is a private repository: only people who can read it on GitHub and whose machine already has github.com git credentials (an SSH key, or `gh auth setup-git` after `gh auth login`) can install from it. No login prompt appears during installation.
 
-## 新增 mod
+## Adding a mod
 
-1. 在 `mods/<mod>/` 放入 mod 的檔案與 README。
-2. 在 `.claude-plugin/marketplace.json` 的 `plugins` 加一筆，`source` 指向 `./mods/<mod>`。
-3. 在上面的表格加一列。
-4. 在 repository 根目錄執行 `claude plugin validate .` 檢查。
+1. Put the mod's files and READMEs in `mods/<mod>/` (English `README.md`, Traditional Chinese `README_tw.md`).
+2. Add an entry to `plugins` in `.claude-plugin/marketplace.json`, with `source` pointing to `./mods/<mod>`.
+3. Add a row to the table above.
+4. Run `claude plugin validate .` at the repository root to check it.

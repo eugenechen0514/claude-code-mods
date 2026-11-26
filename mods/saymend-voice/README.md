@@ -1,56 +1,58 @@
 # saymend-voice
 
-把 [Saymend](https://github.com/eugenechen0514/saymend) 當成 Claude Code 的語音輸入，並用 macOS 的 `say` 朗讀回覆，組成「說話 → 送進 Claude Code → 回覆唸出來」的迴圈。
+English | [繁體中文](README_tw.md)
 
-## 安裝
+Use [Saymend](https://github.com/eugenechen0514/saymend) as voice input for Claude Code, and read replies aloud with macOS `say`, forming a loop of "speak → send to Claude Code → hear the reply".
 
-在終端機的 Claude Code session 輸入：
+## Installation
+
+In a Claude Code session in the terminal, enter:
 
 ```
 /plugin install saymend-voice --marketplace eugenechen0514/claude-code-mods
 ```
 
-其他安裝方式與存取權限說明，見 [marketplace 的 README](../../README.md)。
+For other ways to install and the access requirements, see the [marketplace README](../../README.md).
 
-## 需求
+## Requirements
 
-- macOS（朗讀使用系統的 `say`）。
-- Saymend.app 正在執行，而且是含本機控制介面的版本。
-- `saymend` CLI 在 `PATH` 上（Saymend 的 `Scripts/make-app.sh` 會在 `~/.local/bin/saymend` 建立 symlink）。
+- macOS (replies are read aloud with the system `say`).
+- Saymend.app running, in a version that includes the local control interface.
+- The `saymend` CLI on your `PATH` (Saymend's `Scripts/make-app.sh` creates a symlink at `~/.local/bin/saymend`).
 
-mod 只透過 `saymend` CLI 跟 Saymend 互動，契約見 Saymend repo 的 `docs/control-interface.md`。
+The mod talks to Saymend only through the `saymend` CLI; the contract is in `docs/control-interface.md` in the Saymend repo.
 
-## 指令
+## Commands
 
-| 指令 | 作用 |
+| Command | What it does |
 | --- | --- |
-| `/listen` | 聽寫一段話，說完停頓後直接送出 |
-| `/listen edit` | 聽寫後只填進輸入框，不送出 |
-| `/saymend off` | 關閉語音（預設） |
-| `/saymend speak` | 每次回覆結束後朗讀 |
-| `/saymend loop` | 朗讀後自動聆聽，說完自動送出；說「停止語音」可結束迴圈 |
-| `/saymend stop` | 中斷目前的朗讀與聆聽 |
-| `/saymend status` | 顯示目前的模式與設定 |
-| `/saymend pause <秒>` | 停頓多久視為說完（0.5–10，預設 1.5） |
-| `/saymend max <秒>` | 單段最長可以講多久（10–3600，預設 120） |
-| `/saymend bargein <on\|off>` | 邊唸邊聽：朗讀時就開麥，開口即打斷（需戴耳機） |
-| `/saymend polish <on\|off>` | 送出前先經 Saymend 設定的 LLM 潤飾 |
-| `/saymend voice <名稱\|default>` | 指定朗讀用的系統語音 |
-| `/saymend bin <路徑\|default>` | 指定 `saymend` CLI 的路徑 |
+| `/listen` | Dictate one utterance and send it as soon as you pause |
+| `/listen edit` | Dictate and only fill the prompt box, without sending |
+| `/saymend off` | Turn voice off (default) |
+| `/saymend speak` | Read each reply aloud when it finishes |
+| `/saymend loop` | After reading a reply, listen automatically and send what you say; say 「停止語音」 ("stop voice") to end the loop |
+| `/saymend stop` | Stop the current reading and listening |
+| `/saymend status` | Show the current mode and settings |
+| `/saymend pause <seconds>` | How long a pause counts as finished speaking (0.5–10, default 1.5) |
+| `/saymend max <seconds>` | The longest a single utterance can run (10–3600, default 120) |
+| `/saymend bargein <on\|off>` | Barge-in: keep the microphone open while reading, and stop reading when you start speaking (headphones required) |
+| `/saymend polish <on\|off>` | Polish the text with the LLM configured in Saymend before sending |
+| `/saymend voice <name\|default>` | Choose the system voice used for reading |
+| `/saymend bin <path\|default>` | Set the path to the `saymend` CLI |
 
-設定存在 mod 自己的 store，跨 session 保留。
+Settings are kept in the mod's own store and persist across sessions.
 
-## 行為說明
+## Behavior
 
-- 朗讀前會去掉程式碼、表格、連結網址與 markdown 標記，超過 600 字在句尾截斷。
-- 使用者一開始聽寫（Saymend 熱鍵或 CLI），朗讀就會中斷。
-- 聆聽期間按 Esc 會被 Saymend 接走，用來取消這次聆聽，Claude Code 收不到；按 Saymend 熱鍵則是提早定稿送出。
-- 聽寫預設不做 LLM 潤飾，只有本機 ASR 加上簡轉繁與詞彙表後處理；開啟 `polish` 才會走 Saymend 設定的 provider。
-- 邊唸邊聽只適合戴耳機時使用，否則喇叭的聲音會被當成有人說話。
+- Before reading, code, tables, link URLs and markdown markup are removed; text over 600 characters is cut at the end of a sentence.
+- Reading stops as soon as you start dictating (with the Saymend hotkey or the CLI).
+- While listening, Esc is taken by Saymend to cancel this listening, and Claude Code does not receive it; pressing the Saymend hotkey finalizes and sends early.
+- Dictation is not polished by an LLM by default: only local ASR plus Simplified-to-Traditional conversion and vocabulary post-processing. Turning `polish` on uses the provider configured in Saymend.
+- Barge-in is only suitable with headphones; otherwise the speaker's sound is taken as someone speaking.
 
-## 開發
+## Development
 
-在 repository 根目錄執行：
+At the repository root, run:
 
 ```
 claude plugin validate mods/saymend-voice
