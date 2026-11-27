@@ -70,7 +70,14 @@ type World = {
   cutOff: number
   /** status line 依序被設成什麼（undefined＝清掉） */
   statuses: (string | undefined)[]
+  /** 交給外部朗讀指令（`/saymend speaker`）的呼叫：argv 與 stdin 的文字 */
+  voiced: { argv: string[]; input?: string }[]
+  /** 外部朗讀指令的行程被結束的次數 */
+  voiceKilled: number
 }
+
+/** 測試用的外部朗讀指令（實際使用時是 saymend-remote 的 `say` client）。 */
+const SPEAKER = '/remote/.saymend-remote/bin/say'
 
 /**
  * 代替引擎回答 mod 用到的呼叫。
@@ -91,6 +98,10 @@ function world(
     speakHold?: Promise<void>
     /** dictate 吐出 `started` 後，等到這個 promise 完成才繼續吐後面的行 */
     dictateHold?: Promise<void>
+    /** 外部朗讀指令失敗時寫到 stderr 的話（有給就以結束碼 1 結束） */
+    speakerError?: string
+    /** `saymend status --json` 的 stdout */
+    status?: string
   } = {},
 ): World {
   const seen: World = {
@@ -103,6 +114,8 @@ function world(
     ran: [],
     cutOff: 0,
     statuses: [],
+    voiced: [],
+    voiceKilled: 0,
   }
 
   mock.store(on)
@@ -146,11 +159,31 @@ function world(
     seen.ran.push([...e.argv])
 
     return {
-      value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+      value: {
+        exitCode: 0,
+        stdout: e.argv[1] === 'status' ? (script.status ?? '') : '',
+        stderr: '',
+        isStdoutTruncated: false,
+        isStderrTruncated: false,
+      },
     }
   })
-  on('process.spawn', async function* (_, e) {
+  on('process.spawn', async function* (_, e, next) {
     seen.spawned.push([...e.argv])
+    if (e.argv[0] === SPEAKER) {
+      seen.voiced.push({ argv: [...e.argv], input: e.input })
+      next.signal.addEventListener('abort', () => {
+        seen.voiceKilled += 1
+      })
+      await script.speakHold
+      if (script.speakerError !== undefined) {
+        yield { stream: 'stderr' as const, text: `${script.speakerError}\n` }
+
+        return { value: { code: 1, signal: null } }
+      }
+
+      return { value: { code: 0, signal: null } }
+    }
     if (e.argv[1] === 'events') {
       for (const line of script.events ?? []) {
         yield { stream: 'stdout' as const, text: `${line}\n` }
@@ -617,3 +650,84 @@ test('/saymend pin on：Saymend 連不上時顯示未連線', async ($, on) => {
   expect(seen.statuses.at(-1)).toBe('Saymend 未連線｜語音模式 off')
 })
 
+
+// ── 遠端使用：朗讀交給外部指令、橋接連不上 ──
+
+test('/saymend speaker：朗讀改交給外部指令（文字走 stdin、帶語音），不用這台機器的系統語音', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: `speaker ${SPEAKER}` })
+  expect(reply.text).toContain(SPEAKER)
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'voice Meijia' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.turn.complete({ ...TURN, answer: '已完成 `build`。' })
+  await clock.settle()
+
+  expect(seen.voiced).toEqual([{ argv: [SPEAKER, '-v', 'Meijia'], input: '已完成 build。' }])
+  expect(seen.spoken).toEqual([])
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain(`朗讀指令：${SPEAKER}`)
+
+  // 沒指定語音時不帶 -v；還原成 default 之後回到系統語音
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'voice default' })
+  await $.turn.complete({ ...TURN, answer: '第二則。' })
+  await clock.settle()
+  expect(seen.voiced.at(-1)).toEqual({ argv: [SPEAKER], input: '第二則。' })
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speaker default' })
+  await $.turn.complete({ ...TURN, answer: '第三則。' })
+  await clock.settle()
+  expect(seen.voiced).toHaveLength(2)
+  expect(seen.spoken).toEqual(['第三則。'])
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+})
+
+test('外部朗讀指令：送出新的 prompt 會結束它；指令失敗則提示 stderr 的原因', async ($, on) => {
+  const clock = mock.clock(on)
+  const speech = gate()
+  const seen = world(on, { speakHold: speech.promise, speakerError: 'say: 連不上 Mac' })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'saymend', args: `speaker ${SPEAKER}` })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+
+  // 還在唸的時候使用者送出新的 prompt：行程被結束，不算失敗
+  await $.turn.complete({ ...TURN, answer: '這是一段很長的回覆。' })
+  await clock.settle()
+  await $.prompt.submit({ text: '先停一下', wait: false, origin: { kind: 'composer' } })
+  await clock.settle()
+  expect(seen.voiceKilled).toBe(1)
+  expect(seen.toasts).toEqual([])
+
+  // 指令自己失敗（例如橋接斷線）：提示原因
+  speech.open()
+  await clock.settle()
+  await $.turn.complete({ ...TURN, answer: '第二則。' })
+  await clock.settle()
+  expect(seen.toasts).toEqual(['朗讀失敗：say: 連不上 Mac'])
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speaker default' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+})
+
+test('遠端 client 連不上 Mac 時，/listen 與 /saymend status 顯示橋接的原因而不是「Saymend 沒有在執行」', async ($, on) => {
+  const clock = mock.clock(on)
+  const reason = '連不上 Mac：saymend-remote 沒有在執行，或 SSH 連線中斷'
+  const seen = world(on, {
+    dictate: {
+      lines: [JSON.stringify({ v: 1, type: 'error', code: 'unreachable', message: reason })],
+      code: 3,
+    },
+    status: `${JSON.stringify({ v: 1, app: 'not_running', message: reason })}\n`,
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'listen', args: '' })
+  await clock.settle()
+  expect(seen.toasts).toEqual([reason])
+
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain(`Saymend：${reason}`)
+})

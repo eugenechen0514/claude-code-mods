@@ -13,6 +13,11 @@
 //
 // 邊唸邊聽（bargeIn，預設關）：迴圈模式下朗讀一開始就同時開麥，使用者一開口
 // 就切掉朗讀。喇叭的聲音會被當成有人說話，所以只適合戴耳機時開。
+//
+// 兩種使用情境：
+//   本機  Claude Code 與 Saymend 在同一台 Mac：直接執行 `saymend`，朗讀用引擎的系統語音。
+//   遠端  Claude Code 在 SSH 連過去的主機上：`bin` 與 `speaker` 指到 saymend-remote 的 client
+//         （見 remote/saymend_remote.py），聽寫與朗讀都轉回 Mac 執行。mod 的邏輯兩邊相同。
 
 import type { EngineInterface, ProcessSpawnResult, Register } from 'claude-code'
 
@@ -50,12 +55,18 @@ const USAGE = [
   '　　　/saymend pin <on|off>　　　待命時也把 Saymend 的狀態留在狀態列',
   '　　　/saymend voice <系統語音名稱|default>',
   '　　　/saymend bin <saymend 路徑|default>',
+  '　　　/saymend speaker <朗讀指令|default>　遠端使用時，把朗讀轉回 Mac',
 ].join('\n')
 
 // ── 模組狀態（reload 後歸零；設定值從 $.store 讀回） ──
 let mode: Mode = 'off'
 let voice: string | undefined
 let bin = 'saymend'
+/**
+ * 朗讀改用這個外部指令（介面同 macOS 的 `say`：`[-v 語音]`，文字從 stdin 進）。
+ * 沒設定就用引擎的系統語音。遠端使用時設成 saymend-remote 的 `say` client。
+ */
+let speaker: string | undefined
 /** 邊唸邊聽：迴圈模式下朗讀時就開麥，開口即打斷。 */
 let bargeIn = false
 /** 送出前先讓 Saymend 用設定中的 LLM provider 潤飾（`dictate --polish`）。 */
@@ -98,6 +109,8 @@ async function load($: EngineInterface): Promise<void> {
   voice = typeof storedVoice === 'string' && storedVoice !== '' ? storedVoice : undefined
   const storedBin = await $.store.get('bin')
   bin = typeof storedBin === 'string' && storedBin !== '' ? storedBin : 'saymend'
+  const storedSpeaker = await $.store.get('speaker')
+  speaker = typeof storedSpeaker === 'string' && storedSpeaker !== '' ? storedSpeaker : undefined
   bargeIn = (await $.store.get('bargeIn')) === true
   polish = (await $.store.get('polish')) === true
   pin = (await $.store.get('pin')) === true
@@ -149,7 +162,11 @@ async function speak(
   speaking = stop
   refreshStatus($)
   try {
-    await $.audio.speak(text, { voice, signal: stop.signal })
+    if (speaker === undefined) {
+      await $.audio.speak(text, { voice, signal: stop.signal })
+    } else {
+      await speakWith($, speaker, text, stop.signal)
+    }
 
     return 'done'
   } catch (error) {
@@ -164,6 +181,42 @@ async function speak(
       speaking = null
     }
     refreshStatus($)
+  }
+}
+
+/**
+ * 用外部指令朗讀：`<指令> [-v 語音]`，文字從 stdin 進（與 macOS 的 `say` 相同）。
+ * 中斷時結束那個行程；指令失敗就丟出它在 stderr 說的原因。
+ */
+async function speakWith(
+  $: EngineInterface,
+  command: string,
+  text: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const argv = voice === undefined ? [command] : [command, '-v', voice]
+  const child = $.process.spawn({ argv, input: text })
+  child.result.catch(() => undefined)
+  const kill = (): void => {
+    void child.return(KILLED).catch(() => undefined)
+  }
+  signal.addEventListener('abort', kill, { once: true })
+  let complaint = ''
+  try {
+    for await (const piece of child) {
+      if (piece.stream === 'stderr') {
+        complaint += piece.text
+      }
+    }
+    if (signal.aborted) {
+      throw new Error('朗讀已中斷')
+    }
+    const { code } = await child.result
+    if (code !== 0) {
+      throw new Error(complaint.trim() !== '' ? complaint.trim() : `結束碼 ${String(code)}`)
+    }
+  } finally {
+    signal.removeEventListener('abort', kill)
   }
 }
 
@@ -208,6 +261,7 @@ async function listen(
   let isCancelled = false
   let finalText = ''
   let errorMessage = ''
+  let errorCode = ''
   let code: number | null = null
   const child = $.process.spawn({ argv })
   child.result.catch(() => undefined)
@@ -243,6 +297,7 @@ async function listen(
           finalText = (event.text ?? '').trim()
         } else if (event?.type === 'error') {
           errorMessage = event.message ?? event.code ?? ''
+          errorCode = event.code ?? ''
         }
       }
     }
@@ -298,7 +353,8 @@ async function listen(
         : '沒有聽到內容',
     )
   } else if (code === 3) {
-    $.ui.toast('Saymend 沒有在執行')
+    // `unreachable` 是 saymend-remote 的 client 回的：問題在橋接，不是 Saymend 沒開
+    $.ui.toast(errorCode === 'unreachable' && errorMessage !== '' ? errorMessage : 'Saymend 沒有在執行')
   } else if (code === 4) {
     $.ui.toast('Saymend 正在進行另一段聽寫')
   } else if (code === 7) {
@@ -417,9 +473,17 @@ async function saymendStatus($: EngineInterface): Promise<string> {
   try {
     const ran = await $.process.run([bin, 'status', '--json'], { timeoutMs: 5000 })
     const status: unknown = JSON.parse(ran.stdout.trim().split('\n')[0] ?? '')
-    const fields = status as { app?: string; state?: string; modelReady?: boolean }
+    const fields = status as {
+      app?: string
+      state?: string
+      modelReady?: boolean
+      message?: string
+    }
     if (fields.app !== 'running') {
-      return '沒有在執行'
+      // saymend-remote 的 client 連不上 Mac 時會附上原因
+      return typeof fields.message === 'string' && fields.message !== ''
+        ? fields.message
+        : '沒有在執行'
     }
 
     return `${fields.state ?? '未知'}${fields.modelReady === false ? '（model 未就緒）' : ''}`
@@ -454,7 +518,7 @@ export const register: Register = on => {
       description:
         '不帶參數：聽寫一段話並送出（同 /listen）。語音模式：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
       argumentHint:
-        '[listen [edit]|off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off|pin on|off]',
+        '[listen [edit]|off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off|pin on|off|bin <路徑>|speaker <指令>]',
       immediate: true,
     })
     await $.command.register({
@@ -582,6 +646,18 @@ export const register: Register = on => {
       return { text: `saymend CLI：${bin}` }
     }
 
+    if (verb === 'speaker') {
+      speaker = value === '' || value === 'default' ? undefined : value
+      await (speaker === undefined ? $.store.delete('speaker') : $.store.set('speaker', speaker))
+
+      return {
+        text:
+          speaker === undefined
+            ? '朗讀：這台機器的系統語音。'
+            : `朗讀：交給 ${speaker}（文字從 stdin 進，介面同 macOS 的 say）。`,
+      }
+    }
+
     if (verb === 'status') {
       return {
         text: [
@@ -592,6 +668,7 @@ export const register: Register = on => {
           `停頓視為說完：${pauseMs / 1000} 秒`,
           `單段最長：${maxSeconds} 秒`,
           `朗讀語音：${voice ?? '系統預設'}`,
+          `朗讀指令：${speaker ?? '這台機器的系統語音'}`,
           `saymend CLI：${bin}`,
           `Saymend：${await saymendStatus($)}`,
         ].join('\n'),
