@@ -100,16 +100,16 @@ mod 的程式跑在 Claude Code 所在的那台機器上；麥克風、喇叭和
 | 指令 | 作用 |
 | --- | --- |
 | `/listen` | 聽寫一段話，說完停頓後直接送出 |
-| `/listen edit` | 聽寫後只填進輸入框，不送出 |
-| `/saymend`、`/saymend listen [edit]` | 等同 `/listen [edit]`；`/saymend` 不帶參數就是聽寫並送出 |
+| `/listen draft` | 聽寫後只填進輸入框當草稿，不送出 |
+| `/saymend`、`/saymend listen [draft]` | 等同 `/listen [draft]`；`/saymend` 不帶參數就是聽寫並送出 |
 | `/saymend off` | 關閉這個 session 的語音（預設） |
-| `/saymend speak` | 這個 session 每次回覆結束後朗讀 |
+| `/saymend read` | 這個 session 每次回覆結束後朗讀 |
 | `/saymend loop` | 這個 session 朗讀後自動聆聽，說完自動送出；說「停止語音」可結束迴圈 |
-| `/saymend autospeak <on\|off>` | 每個 session 一開始就是 `speak`（預設關：新 session 從 `off` 開始） |
-| `/saymend stop` | 中斷目前的朗讀與聆聽 |
+| `/saymend autoread <on\|off>` | 每個 session 一開始就是 `read`（預設關：新 session 從 `off` 開始） |
+| `/saymend cancel` | 中斷朗讀；聆聽中則丟棄這一段，不送出（用詞同 `saymend` CLI 的 `cancel`） |
 | `/saymend status` | 顯示目前的模式與設定 |
-| `/saymend pause <秒>` | 停頓多久視為說完（0.5–10，預設 1.5） |
-| `/saymend max <秒>` | 單段最長可以講多久（10–3600，預設 120） |
+| `/saymend silence <秒>` | 說完後靜音多久視為說完（0.5–10，預設 1.5） |
+| `/saymend limit <秒>` | 單段最長可以講多久（10–3600，預設 120） |
 | `/saymend bargein <on\|off>` | 邊唸邊聽：朗讀時就開麥，開口即打斷（需戴耳機） |
 | `/saymend polish <on\|off>` | 送出前先經 Saymend 設定的 LLM 潤飾 |
 | `/saymend pin <on\|off>` | 待命時也把狀態留在狀態列（預設開；關掉後只在朗讀、聆聽或熱鍵聽寫時顯示） |
@@ -117,28 +117,44 @@ mod 的程式跑在 Claude Code 所在的那台機器上；麥克風、喇叭和
 | `/saymend bin <路徑\|default>` | 指定 `saymend` CLI 的路徑；遠端情境指到 client |
 | `/saymend speaker <指令\|default>` | 朗讀改交給這個指令；遠端情境指到 client。`default` 回到這台機器的系統語音 |
 
-語音模式（`off`、`speak`、`loop`）只在下指令的那個 session 有效：你在一個 session 開了朗讀，同時開著的其他 session 和之後新開的 session 都不會跟著唸。mod 更新後 `/reload-plugins`，這個 session 的模式還在。
+語音模式（`off`、`read`、`loop`）只在下指令的那個 session 有效：你在一個 session 開了朗讀，同時開著的其他 session 和之後新開的 session 都不會跟著唸。mod 更新後 `/reload-plugins`，這個 session 的模式還在。
 
-想讓每個 session 都朗讀，開啟 `/saymend autospeak on`：之後新開的 session 會從 `speak` 開始，已經開著的其他 session 要 `/reload-plugins` 才會跟上，個別 session 仍可用 `/saymend off` 關掉。`loop` 不能設成起始模式，因為同時開著的 session 會搶同一支麥克風。
+想讓每個 session 都朗讀，開啟 `/saymend autoread on`：之後新開的 session 會從 `read` 開始，已經開著的其他 session 要 `/reload-plugins` 才會跟上，個別 session 仍可用 `/saymend off` 關掉。`loop` 不能設成起始模式，因為同時開著的 session 會搶同一支麥克風。
 
-其餘設定（`autospeak`、`pause`、`max`、`bargein`、`polish`、`pin`、`voice`、`bin`、`speaker`）存在 mod 自己的 store，整台機器上的 session 共用，跨 session 保留。每台機器各存各的，所以本機和遠端的設定互不影響。
+其餘設定（`autoread`、`silence`、`limit`、`bargein`、`polish`、`pin`、`voice`、`bin`、`speaker`）存在 mod 自己的 store，整台機器上的 session 共用，跨 session 保留。每台機器各存各的，所以本機和遠端的設定互不影響。
 
 `speaker` 指令的介面和 macOS 的 `say` 相同：`<指令> [-v 語音]`，要唸的文字從 stdin 進來，朗讀被中斷時行程會被結束。
 
 ## 狀態列
 
-待命時狀態列會留一行，告訴你 Saymend 連不連得上，以及**眼前這個 session** 會做什麼：
+待命時狀態列會留一行，格式是「Saymend 的狀態｜這個 session 的語音模式」：
 
 ```
-Saymend 待命｜這個 session：不朗讀
-Saymend 待命｜這個 session：朗讀
-Saymend 待命｜這個 session：朗讀＋聆聽｜共 2 個 session 開著 loop
-Saymend 未連線｜這個 session：不朗讀
+idle｜off
+idle｜read
+idle｜loop｜2 sessions in loop
+idle｜read｜1 other session in loop
+offline｜off
+unreachable｜off
 ```
 
-- 「不朗讀」「朗讀」「朗讀＋聆聽」分別對應 `off`、`speak`、`loop`。
+正在做事時，這一行會換成進行中的提示，做完再換回來：
+
+```
+listening… pause when done (/saymend cancel to discard)
+transcribing… (/saymend cancel to discard)
+polishing… (/saymend cancel to discard)
+reading reply… (/saymend cancel to stop)
+reading reply… talk to interrupt (/saymend cancel)
+hotkey dictation…
+```
+
+依序是：聆聽中、辨識中、潤飾中、朗讀中、邊唸邊聽時的朗讀中、你正在用 Saymend 熱鍵聽寫。
+
+- 第一段是 Saymend 的狀態：`idle` 是待命，`offline` 是這台 Mac 的 Saymend 沒有在執行，`unreachable` 是遠端情境下連不回 Mac（遠端連線沒開或 SSH 中斷）。
+- 第二段是**眼前這個 session** 的語音模式：`off` 不朗讀，`read` 朗讀，`loop` 朗讀後自動聆聽。
 - 有別的 session 也開著 `loop` 時，後面會多一段數量。Saymend 一次只收一段聽寫，同時開著兩個 `loop`，你說的話只會送進先開麥的那一個，所以 `loop` 建議一次只在一個 session 開。下 `/saymend loop` 時如果已經有別的 session 開著，也會當場提醒。
-- 數量由 Saymend 統計，所以本機和遠端的 session 會算在一起。這需要支援 `events --presence` 的 Saymend 版本；較舊的版本不顯示數量，其他功能照常。
+- 數量由 Saymend 統計，所以本機和遠端的 session 會算在一起。這需要 Saymend 0.2.0 以後的版本；較舊的版本不顯示數量，其他功能照常。
 - 非互動的 session（例如 `claude -p`）不會為了這一行去連 Saymend。
 - 不想常駐就 `/saymend pin off`。
 
@@ -149,7 +165,7 @@ Saymend 未連線｜這個 session：不朗讀
 - 聆聽期間按 Esc 會被 Saymend 接走，用來取消這次聆聽，Claude Code 收不到；按 Saymend 熱鍵則是提早定稿送出。
 - 聽寫預設不做 LLM 潤飾，只有本機 ASR 加上簡轉繁與詞彙表後處理；開啟 `polish` 才會走 Saymend 設定的 provider。
 - 邊唸邊聽只適合戴耳機時使用，否則喇叭的聲音會被當成有人說話。
-- `speak` 或 `loop` 開著時，每則 prompt 會附一段只有 model 看得到的說明，請它不要自己執行 `say` 或其他發聲指令。這樣你自己的指示（例如 `CLAUDE.md`）要求的語音完成通知，就不會和朗讀重複。
+- `read` 或 `loop` 開著時，每則 prompt 會附一段只有 model 看得到的說明，請它不要自己執行 `say` 或其他發聲指令。這樣你自己的指示（例如 `CLAUDE.md`）要求的語音完成通知，就不會和朗讀重複。
 
 ## 開發
 

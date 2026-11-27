@@ -244,12 +244,12 @@ const TYPED = {
   presentation: { isFullscreen: false, columns: 120 },
 } as const
 
-test('speak 模式：回覆結束後朗讀整理過的文字，不聆聽', async ($, on) => {
+test('read 模式：回覆結束後朗讀整理過的文字，不聆聽', async ($, on) => {
   const clock = mock.clock(on)
   const seen = world(on)
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
   await $.turn.complete({ ...TURN, answer: '已完成 `build`。' })
   await clock.settle()
 
@@ -302,7 +302,7 @@ test('loop 模式：說「停止語音」會關掉迴圈而不送出', async ($,
 
   expect(seen.submitted).toEqual([])
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('模式：speak')
+  expect(status.text).toContain('mode: read')
 })
 
 test('loop 模式：沒聽到聲音就待命，不送出', async ($, on) => {
@@ -315,10 +315,10 @@ test('loop 模式：沒聽到聲音就待命，不送出', async ($, on) => {
   await clock.settle()
 
   expect(seen.submitted).toEqual([])
-  expect(seen.toasts.some(text => text.includes('待命'))).toBe(true)
+  expect(seen.toasts.some(text => text.includes('loop is paused'))).toBe(true)
 })
 
-test('/listen 說完直接送出；/listen edit 只填進輸入框', async ($, on) => {
+test('/listen 說完直接送出；/listen draft 只填進輸入框', async ($, on) => {
   const clock = mock.clock(on)
   const seen = world(on, {
     dictate: { lines: ['{"v":1,"type":"final","text":"幫我看這個錯誤"}'], code: 0 },
@@ -330,7 +330,7 @@ test('/listen 說完直接送出；/listen edit 只填進輸入框', async ($, o
   expect(seen.submitted).toEqual([{ text: '幫我看這個錯誤', asUser: true }])
   expect(seen.filled).toEqual([])
 
-  await $.command.run({ ...TYPED, command: 'listen', args: 'edit' })
+  await $.command.run({ ...TYPED, command: 'listen', args: 'draft' })
   await clock.settle()
   expect(seen.filled).toEqual(['幫我看這個錯誤'])
   expect(seen.submitted.length).toBe(1)
@@ -348,7 +348,7 @@ test('送出被擋下時，文字留在輸入框並提示', async ($, on) => {
   await clock.settle()
 
   expect(seen.filled).toEqual(['幫我看這個錯誤'])
-  expect(seen.toasts.some(text => text.includes('沒能自動送出'))).toBe(true)
+  expect(seen.toasts.some(text => text.includes('Could not send'))).toBe(true)
 })
 
 test('Saymend 沒在執行時 /listen 會提示', async ($, on) => {
@@ -361,7 +361,7 @@ test('Saymend 沒在執行時 /listen 會提示', async ($, on) => {
   await $.command.run({ ...TYPED, command: 'listen', args: '' })
   await clock.settle()
 
-  expect(seen.toasts).toEqual(['Saymend 沒有在執行'])
+  expect(seen.toasts).toEqual(['Saymend is not running'])
   expect(seen.filled).toEqual([])
 })
 
@@ -377,7 +377,7 @@ test('使用者正在用熱鍵聽寫時，回覆結束不朗讀', async ($, on) 
   })
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
   await clock.settle()
   await $.turn.complete({ ...TURN, answer: '已完成。' })
   await clock.settle()
@@ -446,7 +446,7 @@ test('邊唸邊聽：朗讀唸完後一直沒人開口，就取消聽寫並待�
 
   await clock.advance(2000)
   expect(seen.ran.some(argv => argv[1] === 'cancel')).toBe(true)
-  expect(seen.toasts.some(text => text.includes('待命'))).toBe(true)
+  expect(seen.toasts.some(text => text.includes('loop is paused'))).toBe(true)
   expect(seen.submitted).toEqual([])
   mic.open()
 })
@@ -473,7 +473,7 @@ test('邊唸邊聽關閉時（預設）：迴圈照舊等唸完才開麥', async
 
 // ── 可調的停頓時間與單段上限 ──
 
-test('/saymend pause 與 max 會改變交給 CLI 的參數，超出範圍則拒絕', async ($, on) => {
+test('/saymend silence 與 limit 會改變交給 CLI 的參數，超出範圍則拒絕', async ($, on) => {
   const clock = mock.clock(on)
   const seen = world(on, {
     dictate: { lines: ['{"v":1,"type":"final","text":"好"}'], code: 0 },
@@ -483,8 +483,8 @@ test('/saymend pause 與 max 會改變交給 CLI 的參數，超出範圍則拒�
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.command.run({ ...TYPED, command: 'saymend', args: 'bargein off' })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'pause 3' })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'max 300' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'silence 3' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'limit 300' })
   await $.command.run({ ...TYPED, command: 'listen', args: '' })
   await clock.settle()
 
@@ -493,17 +493,17 @@ test('/saymend pause 與 max 會改變交給 CLI 的參數，超出範圍則拒�
   expect(flag(first, '--max-seconds')).toBe('300')
 
   // 超出範圍或不是數字：回報範圍，設定維持原值
-  const tooShort = await $.command.run({ ...TYPED, command: 'saymend', args: 'pause 0.1' })
-  expect(tooShort.text).toContain('0.5 到 10 秒')
-  const notNumber = await $.command.run({ ...TYPED, command: 'saymend', args: 'max 很久' })
-  expect(notNumber.text).toContain('10 到 3600 秒')
+  const tooShort = await $.command.run({ ...TYPED, command: 'saymend', args: 'silence 0.1' })
+  expect(tooShort.text).toContain('between 0.5 and 10 seconds')
+  const notNumber = await $.command.run({ ...TYPED, command: 'saymend', args: 'limit 很久' })
+  expect(notNumber.text).toContain('between 10 and 3600 seconds')
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('停頓視為說完：3 秒')
-  expect(status.text).toContain('單段最長：300 秒')
+  expect(status.text).toContain('silence: 3s')
+  expect(status.text).toContain('limit: 300s')
 
   // 還原成預設值，避免影響同一個模組狀態下的其他測試
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'pause 1.5' })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'max 120' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'silence 1.5' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'limit 120' })
 })
 
 // ── status line ──
@@ -521,7 +521,7 @@ test('status line 只在做事時顯示：待命時清掉，熱鍵聽寫時顯�
   await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
   await clock.settle()
   // 使用者按著 Saymend 熱鍵說話：顯示的是熱鍵聽寫，不是常駐的模式提示
-  expect(seen.statuses.at(-1)).toBe('Saymend 熱鍵聽寫中…')
+  expect(seen.statuses.at(-1)).toBe('hotkey dictation…')
 
   // 熱鍵聽寫結束（事件串流斷開）→ 迴圈模式還開著，但待命時不留任何一行
   hotkey.open()
@@ -531,9 +531,9 @@ test('status line 只在做事時顯示：待命時清掉，熱鍵聽寫時顯�
   // /listen 期間顯示聆聽中，結束後再清掉
   await $.command.run({ ...TYPED, command: 'listen', args: '' })
   await clock.settle()
-  expect(seen.statuses.some(text => text?.startsWith('聆聽中'))).toBe(true)
+  expect(seen.statuses.some(text => text?.startsWith('listening…'))).toBe(true)
   expect(seen.statuses.at(-1)).toBeUndefined()
-  expect(seen.statuses.some(text => text?.includes('語音迴圈'))).toBe(false)
+  expect(seen.statuses.some(text => text?.includes('loop'))).toBe(false)
 })
 
 // ── 潤飾 ──
@@ -563,7 +563,7 @@ test('朗讀開著時，送出的 prompt 會附上「不要自行發聲」的說
   const seen = world(on)
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
   await $.prompt.submit({ text: '幫我跑測試', wait: false, origin: { kind: 'composer' } })
   await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
   await $.prompt.submit({ text: '再跑一次', wait: false, origin: { kind: 'composer' } })
@@ -575,7 +575,7 @@ test('朗讀開著時，送出的 prompt 會附上「不要自行發聲」的說
   expect(seen.contexts[1]).toEqual([])
 })
 
-test('/saymend 不帶參數與 /saymend listen 都等同 /listen；listen edit 只填進輸入框', async ($, on) => {
+test('/saymend 不帶參數與 /saymend listen 都等同 /listen；listen draft 只填進輸入框', async ($, on) => {
   const clock = mock.clock(on)
   const seen = world(on, {
     dictate: { lines: ['{"v":1,"type":"final","text":"幫我看這個錯誤"}'], code: 0 },
@@ -591,13 +591,13 @@ test('/saymend 不帶參數與 /saymend listen 都等同 /listen；listen edit �
   expect(seen.submitted.length).toBe(2)
   expect(seen.filled).toEqual([])
 
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'listen edit' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'listen draft' })
   await clock.settle()
   expect(seen.filled).toEqual(['幫我看這個錯誤'])
   expect(seen.submitted.length).toBe(2)
 
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('模式：off')
+  expect(status.text).toContain('mode: off')
 })
 
 test('邊唸邊聽：朗讀還沒唸完聽寫就空手結束時，重開一段繼續聽，不待命', async ($, on) => {
@@ -619,7 +619,7 @@ test('邊唸邊聽：朗讀還沒唸完聽寫就空手結束時，重開一段�
   await clock.settle()
 
   expect(seen.spawned.filter(argv => argv[1] === 'dictate')).toHaveLength(2)
-  expect(seen.toasts.some(text => text.includes('待命'))).toBe(false)
+  expect(seen.toasts.some(text => text.includes('loop is paused'))).toBe(false)
   expect(seen.cutOff).toBe(1)
   expect(seen.submitted).toEqual([{ text: '等一下', asUser: true }])
   speech.open()
@@ -639,7 +639,7 @@ test('邊唸邊聽：朗讀唸完之後聽寫才空手結束，照舊待命不�
   await clock.settle()
 
   expect(seen.spawned.filter(argv => argv[1] === 'dictate')).toHaveLength(1)
-  expect(seen.toasts.some(text => text.includes('待命'))).toBe(true)
+  expect(seen.toasts.some(text => text.includes('loop is paused'))).toBe(true)
 })
 
 test('/saymend pin on：待命時也顯示 Saymend 狀態與語音模式；off 時清掉', async ($, on) => {
@@ -654,13 +654,13 @@ test('/saymend pin on：待命時也顯示 Saymend 狀態與語音模式；off �
   // 語音模式關著也要能常駐：pin 會自己開始監看 Saymend
   const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'pin on' })
   await clock.settle()
-  expect(reply.text).toContain('常駐狀態列：開')
+  expect(reply.text).toContain('pin: on')
   expect(seen.spawned.some(argv => argv[1] === 'events')).toBe(true)
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：不朗讀')
+  expect(seen.statuses.at(-1)).toBe('idle｜off')
 
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
   await clock.settle()
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀')
+  expect(seen.statuses.at(-1)).toBe('idle｜read')
 
   await $.command.run({ ...TYPED, command: 'saymend', args: 'pin off' })
   await clock.settle()
@@ -676,7 +676,7 @@ test('/saymend pin on：Saymend 連不上時顯示未連線', async ($, on) => {
   await $.command.run({ ...TYPED, command: 'saymend', args: 'pin on' })
   await clock.settle()
 
-  expect(seen.statuses.at(-1)).toBe('Saymend 未連線｜這個 session：不朗讀')
+  expect(seen.statuses.at(-1)).toBe('offline｜off')
 })
 
 
@@ -690,14 +690,14 @@ test('/saymend speaker：朗讀改交給外部指令（文字走 stdin、帶語�
   const reply = await $.command.run({ ...TYPED, command: 'saymend', args: `speaker ${SPEAKER}` })
   expect(reply.text).toContain(SPEAKER)
   await $.command.run({ ...TYPED, command: 'saymend', args: 'voice Meijia' })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
   await $.turn.complete({ ...TURN, answer: '已完成 `build`。' })
   await clock.settle()
 
   expect(seen.voiced).toEqual([{ argv: [SPEAKER, '-v', 'Meijia'], input: '已完成 build。' }])
   expect(seen.spoken).toEqual([])
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain(`朗讀指令：${SPEAKER}`)
+  expect(status.text).toContain(`speaker: ${SPEAKER}`)
 
   // 沒指定語音時不帶 -v；還原成 default 之後回到系統語音
   await $.command.run({ ...TYPED, command: 'saymend', args: 'voice default' })
@@ -720,7 +720,7 @@ test('外部朗讀指令：送出新的 prompt 會結束它；指令失敗則提
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.command.run({ ...TYPED, command: 'saymend', args: `speaker ${SPEAKER}` })
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
 
   // 還在唸的時候使用者送出新的 prompt：行程被結束，不算失敗
   await $.turn.complete({ ...TURN, answer: '這是一段很長的回覆。' })
@@ -735,7 +735,7 @@ test('外部朗讀指令：送出新的 prompt 會結束它；指令失敗則提
   await clock.settle()
   await $.turn.complete({ ...TURN, answer: '第二則。' })
   await clock.settle()
-  expect(seen.toasts).toEqual(['朗讀失敗：say: 連不上 Mac'])
+  expect(seen.toasts).toEqual(['Reading aloud failed: say: 連不上 Mac'])
 
   await $.command.run({ ...TYPED, command: 'saymend', args: 'speaker default' })
   await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
@@ -758,7 +758,7 @@ test('遠端 client 連不上 Mac 時，/listen 與 /saymend status 顯示橋接
   expect(seen.toasts).toEqual([reason])
 
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain(`Saymend：${reason}`)
+  expect(status.text).toContain(`Saymend: ${reason}`)
 })
 
 // ── 模式只在當下的 session 有效 ──
@@ -770,8 +770,8 @@ test('模式只在當下的 session 有效：另一個 session 從 off 開始，
   const seen = world(on)
 
   await $.session.start(START)
-  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
-  expect(reply.text).toContain('這個 session')
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
+  expect(reply.text).toContain('This session')
   await $.turn.complete({ ...TURN, answer: '第一則。' })
   await clock.settle()
   expect(seen.spoken).toEqual(['第一則。'])
@@ -789,16 +789,16 @@ test('模式只在當下的 session 有效：另一個 session 從 off 開始，
   await clock.settle()
   expect(seen.spoken).toEqual(['第一則。', '第二則。'])
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('模式：off')
+  expect(status.text).toContain('mode: off')
 })
 
-test('/saymend autospeak on：每個新 session 從 speak 開始，個別 session 仍可關掉；off 則回到從 off 開始', async ($, on) => {
+test('/saymend autoread on：每個新 session 從 read 開始，個別 session 仍可關掉；off 則回到從 off 開始', async ($, on) => {
   const clock = mock.clock(on)
   const seen = world(on)
 
   await $.session.start(START)
-  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'autospeak on' })
-  expect(reply.text).toContain('每個 session 都朗讀：開')
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'autoread on' })
+  expect(reply.text).toContain('autoread: on')
   // 開的當下這個 session 也開始朗讀
   await $.turn.complete({ ...TURN, answer: '第一則。' })
   await clock.settle()
@@ -810,7 +810,7 @@ test('/saymend autospeak on：每個新 session 從 speak 開始，個別 sessio
   await clock.settle()
   expect(seen.spoken).toEqual(['第一則。'])
 
-  // 新的 session 仍然從 speak 開始
+  // 新的 session 仍然從 read 開始
   seen.newSession()
   await $.session.start(START)
   await $.turn.complete({ ...TURN, answer: '第二則。' })
@@ -818,14 +818,14 @@ test('/saymend autospeak on：每個新 session 從 speak 開始，個別 sessio
   expect(seen.spoken).toEqual(['第一則。', '第二則。'])
 
   // 關掉選項：這個 session 的模式不變，之後的新 session 從 off 開始
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'autospeak off' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'autoread off' })
   const now = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(now.text).toContain('模式：speak')
-  expect(now.text).toContain('每個 session 都朗讀：關')
+  expect(now.text).toContain('mode: read')
+  expect(now.text).toContain('autoread: off')
   seen.newSession()
   await $.session.start(START)
   const later = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(later.text).toContain('模式：off')
+  expect(later.text).toContain('mode: off')
 })
 
 test('新 session 的起始模式不會是 loop；舊版存在 store 的模式不再生效', async ($, on) => {
@@ -839,13 +839,13 @@ test('新 session 的起始模式不會是 loop；舊版存在 store 的模式�
   expect(seen.spoken).toEqual([])
   expect(seen.spawned.some(argv => argv[1] === 'dictate')).toBe(false)
 
-  // autospeak 開著時，在某個 session 開過 loop 也不會讓新 session 自動開麥
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'autospeak on' })
+  // autoread 開著時，在某個 session 開過 loop 也不會讓新 session 自動開麥
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'autoread on' })
   await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
   seen.newSession()
   await $.session.start(START)
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('模式：speak')
+  expect(status.text).toContain('mode: read')
 })
 
 // ── 常駐狀態列預設開、開著 loop 的 session 數 ──
@@ -867,7 +867,7 @@ test('常駐狀態列預設開：互動的 session 一開始就監看 Saymend；
   await $.session.start(START)
   await clock.settle()
   expect(seen.spawned.some(argv => argv[1] === 'events')).toBe(true)
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：不朗讀')
+  expect(seen.statuses.at(-1)).toBe('idle｜off')
 
   // 關掉之後只在做事時顯示
   await $.command.run({ ...TYPED, command: 'saymend', args: 'pin off' })
@@ -891,16 +891,16 @@ test('開著 loop 的 session 向 Saymend 宣告 presence；狀態列顯示共�
   await clock.settle()
   expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json'])
   // 這個 session 沒開 loop：那 2 個都是別人
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：不朗讀｜另有 2 個 session 開著 loop')
+  expect(seen.statuses.at(-1)).toBe('idle｜off｜2 other sessions in loop')
 
   const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
   await clock.settle()
-  expect(reply.text).toContain('另有 2 個 session 也開著 loop')
+  expect(reply.text).toContain('2 other sessions also have loop on')
   expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json', '--presence', 'loop'])
   // 開了 loop 之後自己也算在裡面
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀＋聆聽｜共 2 個 session 開著 loop')
+  expect(seen.statuses.at(-1)).toBe('idle｜loop｜2 sessions in loop')
 
-  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'read' })
   await clock.settle()
   expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json'])
   stream.open()
@@ -921,10 +921,10 @@ test('只有自己開著 loop 時不顯示數量，開 loop 也不提醒', async
   const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
   await clock.settle()
 
-  expect((reply.text ?? '').includes('注意')).toBe(false)
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀＋聆聽')
+  expect((reply.text ?? '').includes('Warning')).toBe(false)
+  expect(seen.statuses.at(-1)).toBe('idle｜loop')
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('開著 loop 的 session：0')
+  expect(status.text).toContain('sessions in loop: 0')
   await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
   stream.open()
 })
@@ -949,10 +949,10 @@ test('舊版 Saymend 不認得 --presence：自動退回不帶參數，照常監
 
   expect(eventStreams().some(argv => argv.includes('--presence'))).toBe(true)
   expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json'])
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀＋聆聽')
+  expect(seen.statuses.at(-1)).toBe('idle｜loop')
   expect(seen.toasts).toEqual([])
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
-  expect(status.text).toContain('開著 loop 的 session：無法得知')
+  expect(status.text).toContain('sessions in loop: unknown')
 
   await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
   // 還原：讓後面的測試重新試 presence
@@ -967,14 +967,90 @@ test('不認得的子指令會列出說明：每個指令各一行，分成聽�
   const help = await $.command.run({ ...TYPED, command: 'saymend', args: 'help' })
   const lines = (help.text ?? '').split('\n')
 
-  expect(lines.filter(line => !line.startsWith('　'))).toEqual([
-    '聽寫',
-    '語音模式（三選一，只影響這個 session）',
-    '控制',
-    '設定（這台機器上的 session 共用）',
+  expect(lines.filter(line => !line.startsWith('  '))).toEqual([
+    'Dictation',
+    'Voice mode (pick one; this session only)',
+    'Control',
+    'Settings (shared by every session on this machine)',
   ])
-  // off、speak、loop、stop、status 各自有一行說明，不擠在同一行
-  for (const verb of ['off', 'speak', 'loop', 'stop', 'status']) {
-    expect(lines.filter(line => line.startsWith(`　/saymend ${verb}　`))).toHaveLength(1)
+  // off、read、loop、cancel、status 各自有一行說明，不擠在同一行
+  for (const verb of ['off', 'read', 'loop', 'cancel', 'status']) {
+    expect(lines.filter(line => line.startsWith(`  /saymend ${verb} `))).toHaveLength(1)
   }
+})
+
+// ── 改名：speak→read、autospeak→autoread、pause→silence、max→limit ──
+
+test('舊名稱存的設定會搬到新名稱；舊指令不再接受，改列出說明', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on, { stored: { autoSpeak: true, pauseMs: 3000, maxSeconds: 300 } })
+
+  await $.session.start(START)
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  // autoSpeak 搬成 autoRead：新 session 從 read 開始
+  expect(status.text).toContain('mode: read')
+  expect(status.text).toContain('autoread: on')
+  expect(status.text).toContain('silence: 3s')
+  expect(status.text).toContain('limit: 300s')
+  await $.turn.complete({ ...TURN, answer: '第一則。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。'])
+
+  // 舊名稱不留別名：回的是用法說明，設定不變
+  for (const args of ['speak', ['auto', 'speak off'].join(''), 'pause 5', 'max 60', 'stop', 'listen edit'.split(' ')[1] ?? '']) {
+    const reply = await $.command.run({ ...TYPED, command: 'saymend', args })
+    expect(reply.text).toContain('Voice mode (pick one; this session only)')
+  }
+  const after = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(after.text).toContain('autoread: on')
+  expect(after.text).toContain('silence: 3s')
+  expect(after.text).toContain('limit: 300s')
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'autoread off' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+})
+
+// ── cancel、listen draft、offline／unreachable ──
+
+test('/saymend cancel：中斷朗讀；聆聽中則丟棄這一段（對應 saymend CLI 的 cancel）', async ($, on) => {
+  const clock = mock.clock(on)
+  const mic = gate()
+  const seen = world(on, { dictateHold: mic.promise, dictate: { lines: [], code: 5 } })
+
+  await $.session.start(START)
+  await $.command.run({ ...TYPED, command: 'listen', args: '' })
+  await clock.settle()
+  expect(seen.statuses.at(-1)).toBe('listening… pause when done (/saymend cancel to discard)')
+
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'cancel' })
+  await clock.settle()
+  expect(reply.text).toContain('Cancelled')
+  expect(seen.ran.some(argv => argv[1] === 'cancel')).toBe(true)
+  // 不會送出 CLI 的 stop（那是定稿並保留文字）
+  expect(seen.ran.some(argv => argv[1] === 'stop')).toBe(false)
+  expect(seen.submitted).toEqual([])
+  mic.open()
+})
+
+test('狀態列分得出 offline（Saymend 沒在執行）與 unreachable（遠端連不回 Mac）', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on, {
+    stored: { pin: true },
+    events: ['{"v":1,"type":"error","code":"unreachable","message":"連不上 Mac：Saymend 的遠端連線沒有開著，或 SSH 連線中斷"}'],
+  })
+
+  await $.session.start(START)
+  await clock.settle()
+  expect(seen.statuses.at(-1)).toBe('unreachable｜off')
+})
+
+test('狀態列：Saymend 沒在執行時是 offline', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on, {
+    stored: { pin: true },
+    events: ['{"v":1,"type":"error","code":"not_running","message":"app 未執行"}'],
+  })
+
+  await $.session.start(START)
+  await clock.settle()
+  expect(seen.statuses.at(-1)).toBe('offline｜off')
 })

@@ -100,16 +100,16 @@ A remote connection lets a remote host make your Mac open its microphone and pla
 | Command | What it does |
 | --- | --- |
 | `/listen` | Dictate one utterance and send it as soon as you pause |
-| `/listen edit` | Dictate and only fill the prompt box, without sending |
-| `/saymend`, `/saymend listen [edit]` | The same as `/listen [edit]`; `/saymend` with no arguments dictates and sends |
+| `/listen draft` | Dictate and only fill the prompt box as a draft, without sending |
+| `/saymend`, `/saymend listen [draft]` | The same as `/listen [draft]`; `/saymend` with no arguments dictates and sends |
 | `/saymend off` | Turn voice off in this session (default) |
-| `/saymend speak` | In this session, read each reply aloud when it finishes |
+| `/saymend read` | In this session, read each reply aloud when it finishes |
 | `/saymend loop` | In this session, after reading a reply, listen automatically and send what you say; say 「停止語音」 ("stop voice") to end the loop |
-| `/saymend autospeak <on\|off>` | Start every session in `speak` (off by default: a new session starts in `off`) |
-| `/saymend stop` | Stop the current reading and listening |
+| `/saymend autoread <on\|off>` | Start every session in `read` (off by default: a new session starts in `off`) |
+| `/saymend cancel` | Stop reading; while listening, discard the utterance without sending it (the same word as `cancel` in the `saymend` CLI) |
 | `/saymend status` | Show the current mode and settings |
-| `/saymend pause <seconds>` | How long a pause counts as finished speaking (0.5–10, default 1.5) |
-| `/saymend max <seconds>` | The longest a single utterance can run (10–3600, default 120) |
+| `/saymend silence <seconds>` | How long a silence counts as finished speaking (0.5–10, default 1.5) |
+| `/saymend limit <seconds>` | The longest a single utterance can run (10–3600, default 120) |
 | `/saymend bargein <on\|off>` | Barge-in: keep the microphone open while reading, and stop reading when you start speaking (headphones required) |
 | `/saymend polish <on\|off>` | Polish the text with the LLM configured in Saymend before sending |
 | `/saymend pin <on\|off>` | Keep the status on the status line while idle too (on by default; when off it is shown only while reading, listening or hotkey dictation) |
@@ -117,28 +117,44 @@ A remote connection lets a remote host make your Mac open its microphone and pla
 | `/saymend bin <path\|default>` | Set the path to the `saymend` CLI; in the remote scenario, point it at the client |
 | `/saymend speaker <command\|default>` | Hand reading to this command; in the remote scenario, point it at the client. `default` returns to this machine's system voice |
 
-The voice mode (`off`, `speak`, `loop`) applies only to the session where you set it: turning reading on in one session does not make other open sessions, or sessions you start later, read aloud. After the mod is updated and you run `/reload-plugins`, the session keeps its mode.
+The voice mode (`off`, `read`, `loop`) applies only to the session where you set it: turning reading on in one session does not make other open sessions, or sessions you start later, read aloud. After the mod is updated and you run `/reload-plugins`, the session keeps its mode.
 
-To have every session read aloud, turn on `/saymend autospeak on`: sessions you start afterwards begin in `speak`, other sessions that are already open follow after `/reload-plugins`, and any one session can still turn it off with `/saymend off`. `loop` cannot be a starting mode, because sessions open at the same time would compete for the same microphone.
+To have every session read aloud, turn on `/saymend autoread on`: sessions you start afterwards begin in `read`, other sessions that are already open follow after `/reload-plugins`, and any one session can still turn it off with `/saymend off`. `loop` cannot be a starting mode, because sessions open at the same time would compete for the same microphone.
 
-The other settings (`autospeak`, `pause`, `max`, `bargein`, `polish`, `pin`, `voice`, `bin`, `speaker`) are kept in the mod's own store, shared by every session on the machine, and persist across sessions. Each machine keeps its own, so local and remote settings do not affect each other.
+The other settings (`autoread`, `silence`, `limit`, `bargein`, `polish`, `pin`, `voice`, `bin`, `speaker`) are kept in the mod's own store, shared by every session on the machine, and persist across sessions. Each machine keeps its own, so local and remote settings do not affect each other.
 
 A `speaker` command has the same interface as macOS `say`: `<command> [-v voice]`, with the text to read on stdin; the process is ended when reading is interrupted.
 
 ## Status line
 
-While idle, the status line keeps one line that tells you whether Saymend can be reached and what **the session in front of you** will do (the text is in Chinese):
+While idle, the status line keeps one line in the form "Saymend's state｜this session's voice mode":
 
 ```
-Saymend 待命｜這個 session：不朗讀
-Saymend 待命｜這個 session：朗讀
-Saymend 待命｜這個 session：朗讀＋聆聽｜共 2 個 session 開著 loop
-Saymend 未連線｜這個 session：不朗讀
+idle｜off
+idle｜read
+idle｜loop｜2 sessions in loop
+idle｜read｜1 other session in loop
+offline｜off
+unreachable｜off
 ```
 
-- 「不朗讀」 (does not read), 「朗讀」 (reads) and 「朗讀＋聆聽」 (reads and listens) stand for `off`, `speak` and `loop`. 「待命」 is idle and 「未連線」 is not connected.
+While something is happening, the line shows what is in progress instead, and returns to the form above when it is done:
+
+```
+listening… pause when done (/saymend cancel to discard)
+transcribing… (/saymend cancel to discard)
+polishing… (/saymend cancel to discard)
+reading reply… (/saymend cancel to stop)
+reading reply… talk to interrupt (/saymend cancel)
+hotkey dictation…
+```
+
+The fifth line is reading with barge-in on, and the last one means you are dictating with the Saymend hotkey.
+
+- The first part is Saymend's state: `idle`; `offline` when Saymend is not running on this Mac; `unreachable` when, in the remote scenario, the Mac cannot be reached (the remote connection is off or SSH dropped).
+- The second part is the voice mode of **the session in front of you**: `off` does not read, `read` reads replies aloud, `loop` reads and then listens.
 - When another session also has `loop` on, a count follows. Saymend takes one dictation at a time, so with two sessions in `loop` what you say goes only to the one that opened the microphone first; keep `loop` on in one session at a time. `/saymend loop` also warns you on the spot when another session already has it on.
-- Saymend does the counting, so local and remote sessions are counted together. This needs a Saymend version that supports `events --presence`; with an older version the count is not shown and everything else works as before.
+- Saymend does the counting, so local and remote sessions are counted together. This needs Saymend 0.2.0 or later; with an older version the count is not shown and everything else works as before.
 - A non-interactive session (for example `claude -p`) does not connect to Saymend just for this line.
 - To stop keeping the line, use `/saymend pin off`.
 
@@ -149,7 +165,7 @@ Saymend 未連線｜這個 session：不朗讀
 - While listening, Esc is taken by Saymend to cancel this listening, and Claude Code does not receive it; pressing the Saymend hotkey finalizes and sends early.
 - Dictation is not polished by an LLM by default: only local ASR plus Simplified-to-Traditional conversion and vocabulary post-processing. Turning `polish` on uses the provider configured in Saymend.
 - Barge-in is only suitable with headphones; otherwise the speaker's sound is taken as someone speaking.
-- While `speak` or `loop` is on, each prompt carries a note (visible only to the model) asking it not to run `say` or other sound-making commands itself, so a spoken completion notice required by your own instructions (for example in `CLAUDE.md`) does not double up with the reading.
+- While `read` or `loop` is on, each prompt carries a note (visible only to the model) asking it not to run `say` or other sound-making commands itself, so a spoken completion notice required by your own instructions (for example in `CLAUDE.md`) does not double up with the reading.
 
 ## Development
 

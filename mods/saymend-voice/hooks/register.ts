@@ -10,9 +10,9 @@
 //
 // 模式（存在 $.state，只在當下的 session 有效；其他設定存在 $.store，整台機器共用）：
 //   off   什麼都不做
-//   speak 每次回覆結束後朗讀
+//   read  每次回覆結束後朗讀
 //   loop  朗讀後自動聆聽，說完自動送出（免手動迴圈）
-// 新 session 從 off 開始；`autoSpeak` 開著時從 speak 開始。loop 不能當起始值：
+// 新 session 從 off 開始；`autoRead` 開著時從 read 開始。loop 不能當起始值：
 // 同時開著的 session 會搶同一支麥克風。
 //
 // 邊唸邊聽（bargeIn，預設關）：迴圈模式下朗讀一開始就同時開麥，使用者一開口
@@ -32,14 +32,14 @@ import { createLineReader, isStopPhrase, parseEvent, toSpeech } from './speech'
 /** 這個 session 的語音模式（$.state）。 */
 const MODE = { plugin: 'saymend-voice', key: 'mode' } as const
 
-/** 說話後連續靜音多久視為說完（毫秒）：預設值與 `/saymend pause` 可設的範圍。 */
-const DEFAULT_PAUSE_MS = 1500
-const PAUSE_MIN_MS = 500
-const PAUSE_MAX_MS = 10_000
-/** 單段聽寫上限（秒）：預設值與 `/saymend max` 可設的範圍（上限是 CLI 的上限）。 */
-const DEFAULT_MAX_SECONDS = 120
-const MAX_SECONDS_MIN = 10
-const MAX_SECONDS_MAX = 3600
+/** 說話後連續靜音多久視為說完（毫秒）：預設值與 `/saymend silence` 可設的範圍。 */
+const DEFAULT_SILENCE_MS = 1500
+const SILENCE_MIN_MS = 500
+const SILENCE_MAX_MS = 10_000
+/** 單段聽寫上限（秒）：預設值與 `/saymend limit` 可設的範圍（上限是 CLI 的上限）。 */
+const DEFAULT_LIMIT_SECONDS = 120
+const LIMIT_SECONDS_MIN = 10
+const LIMIT_SECONDS_MAX = 3600
 /** 免手動迴圈：開始聆聽後多久沒人說話就待命（秒）。 */
 const NO_SPEECH_SECONDS = 10
 /** 邊唸邊聽時麥克風在朗讀期間就開了：單段上限要多留這段朗讀的時間（秒）。 */
@@ -52,27 +52,34 @@ const RETRY_MAX_MS = 60_000
 
 const KILLED: ProcessSpawnResult = { code: null, signal: 'SIGTERM' }
 
+/** `$.store` 裡改過名的設定：舊名稱 → 新名稱。 */
+const RENAMED_KEYS = [
+  ['autoSpeak', 'autoRead'],
+  ['pauseMs', 'silenceMs'],
+  ['maxSeconds', 'limitSeconds'],
+] as const
+
 const USAGE = [
-  '聽寫',
-  '　/saymend　　　　　　　　　聽寫一段話，說完直接送出（/listen 是同一個動作）',
-  '　/saymend listen edit　　　聽寫後只填進輸入框，不送出',
-  '語音模式（三選一，只影響這個 session）',
-  '　/saymend off　　　　　　　不朗讀（預設）',
-  '　/saymend speak　　　　　　每則回覆結束後朗讀',
-  '　/saymend loop　　　　　　 朗讀後自動聆聽，說完自動送出',
-  '控制',
-  '　/saymend stop　　　　　　 中斷正在進行的朗讀與聆聽',
-  '　/saymend status　　　　　 顯示目前的模式與所有設定',
-  '設定（這台機器上的 session 共用）',
-  '　/saymend autospeak on|off　每個新 session 一開始就是 speak',
-  '　/saymend pause <秒>　　　　停頓多久視為說完（0.5–10，預設 1.5）',
-  '　/saymend max <秒>　　　　　單段最長可以講多久（10–3600，預設 120）',
-  '　/saymend bargein on|off　　邊唸邊聽：朗讀時就開麥，開口即打斷（需戴耳機）',
-  '　/saymend polish on|off　　 送出前先經 Saymend 的 LLM 潤飾',
-  '　/saymend pin on|off　　　　待命時也在狀態列顯示 Saymend 的狀態（預設開）',
-  '　/saymend voice <名稱|default>　　朗讀用的系統語音',
-  '　/saymend bin <路徑|default>　　　saymend CLI 的路徑（遠端使用時指到 client）',
-  '　/saymend speaker <指令|default>　朗讀改交給這個指令（遠端使用時指到 client）',
+  'Dictation',
+  '  /saymend                          dictate one utterance and send it (same as /listen)',
+  '  /saymend listen draft             dictate into the prompt box as a draft, without sending',
+  'Voice mode (pick one; this session only)',
+  '  /saymend off                      do not read replies aloud (default)',
+  '  /saymend read                     read each reply aloud when it finishes',
+  '  /saymend loop                     read the reply, then listen and send what you say',
+  'Control',
+  '  /saymend cancel                   stop reading; discard the dictation in progress',
+  '  /saymend status                   show the mode and every setting',
+  'Settings (shared by every session on this machine)',
+  '  /saymend autoread on|off          start every new session in read',
+  '  /saymend silence <seconds>        silence that counts as finished speaking (0.5–10, default 1.5)',
+  '  /saymend limit <seconds>          longest single utterance (10–3600, default 120)',
+  '  /saymend bargein on|off           listen while reading; talk to interrupt (headphones needed)',
+  '  /saymend polish on|off            polish with the LLM set in Saymend before sending',
+  '  /saymend pin on|off               keep the status line while idle (default on)',
+  '  /saymend voice <name|default>     system voice used for reading',
+  '  /saymend bin <path|default>       path of the saymend CLI (the client, when remote)',
+  '  /saymend speaker <command|default>  command that reads aloud (the client, when remote)',
 ].join('\n')
 
 // ── 模組狀態（reload 後歸零；設定值從 $.store 讀回） ──
@@ -90,10 +97,10 @@ let bargeIn = false
 let polish = false
 /** 待命時也把 Saymend 的狀態留在 status line（預設開；關掉後只在做事時顯示） */
 let pin = true
-/** 新 session 的起始模式是 speak 而不是 off（預設關） */
-let autoSpeak = false
-let pauseMs = DEFAULT_PAUSE_MS
-let maxSeconds = DEFAULT_MAX_SECONDS
+/** 新 session 的起始模式是 read 而不是 off（預設關） */
+let autoRead = false
+let silenceMs = DEFAULT_SILENCE_MS
+let limitSeconds = DEFAULT_LIMIT_SECONDS
 let isLoaded = false
 
 let speaking: AbortController | null = null
@@ -109,7 +116,11 @@ let watching: { tag: string | undefined; kill: () => void } | null = null
 /** 每次重開監看就加一；舊的那一輪看到數字變了就自己收掉。 */
 let watchEpoch = 0
 let retryDelay = RETRY_MS
-/** Saymend 目前狀態；`unknown` 表示連不上 app。 */
+/**
+ * Saymend 目前狀態（契約 v1 的 `state`），另外兩個是這裡自己的：
+ * `unknown` Saymend 沒在執行或 CLI 不存在（顯示成 offline）；
+ * `unreachable` 遠端的 client 連不回 Mac。
+ */
 let saymendState = 'unknown'
 /** 所有連到這個 Saymend 的 session 裡，有幾個開著 loop；Saymend 沒回報就是 undefined。 */
 let loopSessions: number | undefined
@@ -135,9 +146,25 @@ async function load($: EngineInterface): Promise<void> {
   if ((await $.store.get('mode')) !== undefined) {
     await $.store.delete('mode')
   }
-  autoSpeak = (await $.store.get('autoSpeak')) === true
-  const held = (await $.state.get(MODE)).value
-  mode = held === 'off' || held === 'speak' || held === 'loop' ? held : autoSpeak ? 'speak' : 'off'
+  // 0.6 以前的名稱：autoSpeak、pauseMs、maxSeconds。搬到新名稱，舊的刪掉
+  for (const [old, renamed] of RENAMED_KEYS) {
+    const value = await $.store.get(old)
+    if (value !== undefined) {
+      if ((await $.store.get(renamed)) === undefined) {
+        await $.store.set(renamed, value)
+      }
+      await $.store.delete(old)
+    }
+  }
+  autoRead = (await $.store.get('autoRead')) === true
+  // 模式 speak 改名為 read；reload 前存在 session 裡的舊值照新名稱讀
+  const held: unknown = (await $.state.get(MODE)).value
+  mode =
+    held === 'off' || held === 'read' || held === 'loop'
+      ? held
+      : held === 'speak' || autoRead
+        ? 'read'
+        : 'off'
   const storedVoice = await $.store.get('voice')
   voice = typeof storedVoice === 'string' && storedVoice !== '' ? storedVoice : undefined
   const storedBin = await $.store.get('bin')
@@ -147,10 +174,10 @@ async function load($: EngineInterface): Promise<void> {
   bargeIn = (await $.store.get('bargeIn')) === true
   polish = (await $.store.get('polish')) === true
   pin = (await $.store.get('pin')) !== false
-  pauseMs = within(await $.store.get('pauseMs'), PAUSE_MIN_MS, PAUSE_MAX_MS) ?? DEFAULT_PAUSE_MS
-  maxSeconds =
-    within(await $.store.get('maxSeconds'), MAX_SECONDS_MIN, MAX_SECONDS_MAX) ??
-    DEFAULT_MAX_SECONDS
+  silenceMs = within(await $.store.get('silenceMs'), SILENCE_MIN_MS, SILENCE_MAX_MS) ?? DEFAULT_SILENCE_MS
+  limitSeconds =
+    within(await $.store.get('limitSeconds'), LIMIT_SECONDS_MIN, LIMIT_SECONDS_MAX) ??
+    DEFAULT_LIMIT_SECONDS
   isLoaded = true
 }
 
@@ -161,30 +188,30 @@ async function load($: EngineInterface): Promise<void> {
  */
 function refreshStatus($: EngineInterface): void {
   if (listening !== null && speaking !== null) {
-    $.ui.status('朗讀中… 直接開口就能打斷（/saymend stop 中斷）')
+    $.ui.status('reading reply… talk to interrupt (/saymend cancel)')
   } else if (listening !== null && saymendState === 'polishing') {
-    $.ui.status('潤飾中…（/saymend stop 取消）')
+    $.ui.status('polishing… (/saymend cancel to discard)')
   } else if (listening !== null && saymendState === 'transcribing') {
-    $.ui.status('辨識中…（/saymend stop 取消）')
+    $.ui.status('transcribing… (/saymend cancel to discard)')
   } else if (listening !== null) {
-    $.ui.status('聆聽中… 說完停頓一下會自動結束（/saymend stop 取消）')
+    $.ui.status('listening… pause when done (/saymend cancel to discard)')
   } else if (speaking !== null) {
-    $.ui.status('朗讀中…（/saymend stop 中斷）')
+    $.ui.status('reading reply… (/saymend cancel to stop)')
   } else if (BUSY_STATES.has(saymendState)) {
     // 不是這個 mod 發起的聽寫：使用者按了 Saymend 熱鍵
-    $.ui.status('Saymend 熱鍵聽寫中…')
+    $.ui.status('hotkey dictation…')
   } else if (pin) {
-    // 常駐：待命時也留一行，看得到 Saymend 連不連得上、這個 session 會不會朗讀與聆聽
-    const state = saymendState === 'idle' ? '待命' : saymendState === 'unknown' ? '未連線' : saymendState
-    const role = mode === 'loop' ? '朗讀＋聆聽' : mode === 'speak' ? '朗讀' : '不朗讀'
+    // 常駐：待命時也留一行，看得到 Saymend 連不連得上、這個 session 的語音模式。
+    // 引擎會在前面標上 mod 的名字，所以這裡不再寫 Saymend；用英文，跟指令的字一致
+    const state = saymendState === 'unknown' ? 'offline' : saymendState
     const others = otherLoopSessions()
     const crowd =
       others === 0
         ? ''
         : mode === 'loop'
-          ? `｜共 ${others + 1} 個 session 開著 loop`
-          : `｜另有 ${others} 個 session 開著 loop`
-    $.ui.status(`Saymend ${state}｜這個 session：${role}${crowd}`)
+          ? `｜${others + 1} sessions in loop`
+          : `｜${others} other session${others === 1 ? '' : 's'} in loop`
+    $.ui.status(`${state}｜${mode}${crowd}`)
   } else {
     $.ui.status(undefined)
   }
@@ -224,7 +251,7 @@ async function speak(
     if (stop.signal.aborted) {
       return 'aborted'
     }
-    $.ui.toast(`朗讀失敗：${describe(error)}`)
+    $.ui.toast(`Reading aloud failed: ${describe(error)}`)
 
     return 'failed'
   } finally {
@@ -260,11 +287,11 @@ async function speakWith(
       }
     }
     if (signal.aborted) {
-      throw new Error('朗讀已中斷')
+      throw new Error('reading interrupted')
     }
     const { code } = await child.result
     if (code !== 0) {
-      throw new Error(complaint.trim() !== '' ? complaint.trim() : `結束碼 ${String(code)}`)
+      throw new Error(complaint.trim() !== '' ? complaint.trim() : `exit code ${String(code)}`)
     }
   } finally {
     signal.removeEventListener('abort', kill)
@@ -273,7 +300,7 @@ async function speakWith(
 
 /**
  * 請 Saymend 聽寫一段。
- * `submit`：拿到文字後直接送出；否則填進輸入框讓人確認（`/listen edit`）。
+ * `submit`：拿到文字後直接送出；否則填進輸入框讓人確認（`/listen draft`）。
  * `handsFree`：免手動迴圈的一輪，沒人說話就待命，並接受口頭停止指令。
  * `overSpeech`：邊唸邊聽，朗讀還在進行就開麥；聽到開口才切掉朗讀。
  *   這時沒人說話的待命時間改由 `armNoSpeech` 從朗讀結束後起算。
@@ -296,10 +323,10 @@ async function listen(
     'dictate',
     '--json',
     '--silence-ms',
-    String(pauseMs),
+    String(silenceMs),
     '--max-seconds',
     String(
-      isOverSpeech ? Math.min(MAX_SECONDS_MAX, maxSeconds + BARGE_EXTRA_SECONDS) : maxSeconds,
+      isOverSpeech ? Math.min(LIMIT_SECONDS_MAX, limitSeconds + BARGE_EXTRA_SECONDS) : limitSeconds,
     ),
   ]
   if (options.handsFree && !isOverSpeech) {
@@ -355,7 +382,7 @@ async function listen(
     code = (await child.result).code
   } catch (error) {
     if (!isCancelled) {
-      $.ui.toast(`無法執行 ${bin}：${describe(error)}`)
+      $.ui.toast(`Cannot run ${bin}: ${describe(error)}`)
     }
 
     return
@@ -372,19 +399,19 @@ async function listen(
 
   if (code === 0 && finalText !== '') {
     if (options.handsFree && isStopPhrase(finalText)) {
-      await setMode($, 'speak')
-      $.ui.toast('已關閉語音迴圈（仍會朗讀回覆）')
+      await setMode($, 'read')
+      $.ui.toast('Loop is off; mode is now read (replies are still read aloud)')
     } else if (options.submit) {
       const sent = await $.prompt.submit({ text: finalText, asUser: true })
       if (sent.drop !== undefined) {
         // 沒送進去就把文字留在輸入框，不要讓剛說的話消失
         await $.prompt.fill({ text: finalText, mode: 'insert' })
-        $.ui.toast(`沒能自動送出（${sent.drop}），文字已填入輸入框`)
+        $.ui.toast(`Could not send (${sent.drop}); the text is in the prompt box`)
       }
     } else {
       const filled = await $.prompt.fill({ text: finalText, mode: 'insert' })
       if (!filled.isFilled) {
-        $.ui.toast(`沒能填入輸入框：${finalText}`)
+        $.ui.toast(`Could not fill the prompt box: ${finalText}`)
       }
     }
 
@@ -400,20 +427,22 @@ async function listen(
     }
     $.ui.toast(
       options.handsFree
-        ? '沒聽到聲音，語音迴圈待命中。輸入 /listen 繼續'
-        : '沒有聽到內容',
+        ? 'Heard nothing; loop is paused. Type /listen to continue'
+        : 'Heard nothing',
     )
   } else if (code === 3) {
     // `unreachable` 是遠端 client 回的：問題在回 Mac 的連線，不是 Saymend 沒開
-    $.ui.toast(errorCode === 'unreachable' && errorMessage !== '' ? errorMessage : 'Saymend 沒有在執行')
+    $.ui.toast(errorCode === 'unreachable' && errorMessage !== '' ? errorMessage : 'Saymend is not running')
   } else if (code === 4) {
-    $.ui.toast('Saymend 正在進行另一段聽寫')
+    $.ui.toast('Saymend is busy with another dictation')
   } else if (code === 7) {
-    $.ui.toast('Saymend 的語音 model 尚未就緒')
+    $.ui.toast('The Saymend speech model is not ready')
   } else if (code === 8) {
-    $.ui.toast('Saymend 沒有麥克風權限')
+    $.ui.toast('Saymend has no microphone permission')
   } else {
-    $.ui.toast(errorMessage !== '' ? `聽寫失敗：${errorMessage}` : `聽寫失敗（結束碼 ${String(code)}）`)
+    $.ui.toast(
+      errorMessage !== '' ? `Dictation failed: ${errorMessage}` : `Dictation failed (exit code ${String(code)})`,
+    )
   }
 }
 
@@ -426,7 +455,7 @@ function armNoSpeech($: EngineInterface, handle: Listening): void {
   $.clock.after(NO_SPEECH_SECONDS * 1000, () => {
     if (listening === handle && !handle.hasSpoken) {
       handle.cancel()
-      $.ui.toast('沒聽到聲音，語音迴圈待命中。輸入 /listen 繼續')
+      $.ui.toast('Heard nothing; loop is paused. Type /listen to continue')
     }
   })
 }
@@ -480,6 +509,7 @@ async function watch($: EngineInterface, epoch: number): Promise<void> {
   }
   const tag = presenceTag()
   let code: number | null = null
+  let failure = ''
   let own: typeof watching = null
   try {
     const child = $.process.spawn({
@@ -500,6 +530,10 @@ async function watch($: EngineInterface, epoch: number): Promise<void> {
       }
       for (const line of read(piece.text)) {
         const event = parseEvent(line)
+        if (event?.type === 'error') {
+          // 串流結束前 CLI 會說原因：`unreachable` 是遠端 client 連不回 Mac
+          failure = event.code ?? ''
+        }
         if (event?.type !== 'state' || event.state === undefined) {
           continue
         }
@@ -532,7 +566,7 @@ async function watch($: EngineInterface, epoch: number): Promise<void> {
 
     return
   }
-  saymendState = 'unknown'
+  saymendState = failure === 'unreachable' ? 'unreachable' : 'unknown'
   loopSessions = undefined
   refreshStatus($)
   const delay = retryDelay
@@ -607,19 +641,19 @@ async function describeSaymend($: EngineInterface): Promise<string[]> {
     const fields = await readStatus($)
     if (fields.app !== 'running') {
       return [
-        `Saymend：${
-          typeof fields.message === 'string' && fields.message !== '' ? fields.message : '沒有在執行'
+        `Saymend: ${
+          typeof fields.message === 'string' && fields.message !== '' ? fields.message : 'not running'
         }`,
       ]
     }
     const total = loopCount(fields.presence)
 
     return [
-      `Saymend：${fields.state ?? '未知'}${fields.modelReady === false ? '（model 未就緒）' : ''}`,
-      `開著 loop 的 session：${total === undefined ? '無法得知（Saymend 版本較舊）' : String(total)}`,
+      `Saymend: ${fields.state ?? 'unknown'}${fields.modelReady === false ? ' (model not ready)' : ''}`,
+      `sessions in loop: ${total === undefined ? 'unknown (older Saymend)' : String(total)}`,
     ]
   } catch (error) {
-    return [`Saymend：無法取得（${describe(error)}）`]
+    return [`Saymend: unavailable (${describe(error)})`]
   }
 }
 
@@ -641,12 +675,13 @@ async function countOtherLoops($: EngineInterface): Promise<number> {
  */
 function beginListening($: EngineInterface, args: string): { text?: string } {
   if (listening !== null) {
-    return { text: '已經在聆聽中。' }
+    return { text: 'Already listening.' }
   }
-  // 預設說完就送出；`edit` 只填入輸入框，讓人改完再自己按 Enter
-  const submit = !/(^|\s)(edit|編輯)(\s|$)/.test(args)
+  // 預設說完就送出；`draft` 只填入輸入框當草稿，讓人改完再自己按 Enter。
+  // 不叫 edit：Saymend 裡的 edit 是「用說的修正已上屏的文字」，是另一回事
+  const submit = !/(^|\s)draft(\s|$)/.test(args)
   void listen($, { submit, handsFree: false }).catch(error => {
-    $.ui.toast(`聽寫失敗：${describe(error)}`)
+    $.ui.toast(`Dictation failed: ${describe(error)}`)
   })
 
   return {}
@@ -661,15 +696,16 @@ export const register: Register = on => {
     await $.command.register({
       name: 'saymend',
       description:
-        '不帶參數：聽寫一段話並送出（同 /listen）。語音模式（只在這個 session）：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
+        'No argument: dictate one utterance and send it (same as /listen). Voice mode for this session: off, read (read replies aloud), loop (read, then listen and send)',
       argumentHint:
-        '[listen [edit]|off|speak|loop|stop|status|autospeak on|off|pause <秒>|max <秒>|bargein on|off|polish on|off|pin on|off|bin <路徑>|speaker <指令>]',
+        '[listen [draft]|off|read|loop|cancel|status|autoread on|off|silence <seconds>|limit <seconds>|bargein on|off|polish on|off|pin on|off|bin <path>|speaker <command>]',
       immediate: true,
     })
     await $.command.register({
       name: 'listen',
-      description: '用 Saymend 聽寫一段話並直接送出（加 edit 只填入輸入框，不送出；同 /saymend listen）',
-      argumentHint: '[edit]',
+      description:
+        'Dictate one utterance with Saymend and send it (add draft to only fill the prompt box; same as /saymend listen)',
+      argumentHint: '[draft]',
     })
     // 常駐狀態列只對有人在看的 session 有意義；非互動的 session 不為了它一直連著 Saymend
     if (mode !== 'off' || (pin && e.isInteractive)) {
@@ -690,55 +726,56 @@ export const register: Register = on => {
       return beginListening($, value)
     }
 
-    if (verb === 'off' || verb === 'speak' || verb === 'loop') {
+    if (verb === 'off' || verb === 'read' || verb === 'loop') {
       // 要在切換之前數：切換後自己也會被算進去
       const others = verb === 'loop' ? await countOtherLoops($) : 0
       await setMode($, verb)
       const note = {
-        off: '這個 session 的語音已關閉。',
-        speak: '這個 session 之後每次回覆結束會朗讀。',
-        loop: '這個 session 的語音迴圈已開啟：朗讀後自動聆聽，說完自動送出。說「停止語音」可結束迴圈。',
+        off: 'Voice is off for this session.',
+        read: 'This session now reads each reply aloud when it finishes.',
+        loop: 'Loop is on for this session: it reads each reply, then listens and sends what you say. Say 「停止語音」 to end the loop.',
       }
 
       const warning =
         others > 0
-          ? `\n注意：另有 ${others} 個 session 也開著 loop。Saymend 一次只收一段聽寫，你說的話只會送進先開麥的那一個。`
+          ? `\nWarning: ${others} other session${others === 1 ? ' also has' : 's also have'} loop on. Saymend takes one dictation at a time, so what you say goes only to the session that opened the microphone first.`
           : ''
 
       return { text: note[verb] + warning }
     }
 
-    if (verb === 'stop') {
+    // 與 saymend CLI 的用詞一致：cancel＝丟棄（CLI 的 stop 是定稿並保留文字，這裡不提供）
+    if (verb === 'cancel') {
       stopSpeaking()
       listening?.cancel()
 
-      return { text: '已中斷朗讀與聆聽。' }
+      return { text: 'Cancelled: reading stopped, and a dictation in progress is discarded.' }
     }
 
-    if (verb === 'pause') {
+    if (verb === 'silence') {
       if (value !== '') {
-        const ms = within(Number(value) * 1000, PAUSE_MIN_MS, PAUSE_MAX_MS)
+        const ms = within(Number(value) * 1000, SILENCE_MIN_MS, SILENCE_MAX_MS)
         if (ms === undefined) {
-          return { text: `停頓時間要在 ${PAUSE_MIN_MS / 1000} 到 ${PAUSE_MAX_MS / 1000} 秒之間。` }
+          return { text: `silence must be between ${SILENCE_MIN_MS / 1000} and ${SILENCE_MAX_MS / 1000} seconds.` }
         }
-        pauseMs = Math.round(ms)
-        await $.store.set('pauseMs', pauseMs)
+        silenceMs = Math.round(ms)
+        await $.store.set('silenceMs', silenceMs)
       }
 
-      return { text: `停頓 ${pauseMs / 1000} 秒視為說完。` }
+      return { text: `silence: ${silenceMs / 1000}s counts as finished speaking.` }
     }
 
-    if (verb === 'max') {
+    if (verb === 'limit') {
       if (value !== '') {
-        const seconds = within(Number(value), MAX_SECONDS_MIN, MAX_SECONDS_MAX)
+        const seconds = within(Number(value), LIMIT_SECONDS_MIN, LIMIT_SECONDS_MAX)
         if (seconds === undefined) {
-          return { text: `單段上限要在 ${MAX_SECONDS_MIN} 到 ${MAX_SECONDS_MAX} 秒之間。` }
+          return { text: `limit must be between ${LIMIT_SECONDS_MIN} and ${LIMIT_SECONDS_MAX} seconds.` }
         }
-        maxSeconds = Math.round(seconds)
-        await $.store.set('maxSeconds', maxSeconds)
+        limitSeconds = Math.round(seconds)
+        await $.store.set('limitSeconds', limitSeconds)
       }
 
-      return { text: `單段最長 ${maxSeconds} 秒，到了會自動定稿送出。` }
+      return { text: `limit: ${limitSeconds}s per utterance; when reached it is finalized and sent.` }
     }
 
     if (verb === 'bargein') {
@@ -749,8 +786,8 @@ export const register: Register = on => {
 
       return {
         text: bargeIn
-          ? '邊唸邊聽：開。迴圈模式下朗讀時就會開麥，直接開口即可打斷。請戴耳機，否則喇叭的聲音會被當成你在說話。'
-          : '邊唸邊聽：關。',
+          ? 'bargein: on. In loop mode the microphone opens while reading; talk to interrupt. Wear headphones, or the speakers are taken as you talking.'
+          : 'bargein: off.',
       }
     }
 
@@ -762,25 +799,25 @@ export const register: Register = on => {
 
       return {
         text: polish
-          ? '潤飾：開。說完後先經 Saymend 設定的 LLM 潤飾再送出，會比較慢；潤飾失敗時送出未潤飾的文字。'
-          : '潤飾：關。說完直接送出辨識結果。',
+          ? 'polish: on. What you say is polished by the LLM set in Saymend before it is sent, which is slower; if polishing fails the unpolished text is sent.'
+          : 'polish: off. The recognized text is sent as is.',
       }
     }
 
-    if (verb === 'autospeak') {
+    if (verb === 'autoread') {
       if (value === 'on' || value === 'off') {
-        autoSpeak = value === 'on'
-        await (autoSpeak ? $.store.set('autoSpeak', true) : $.store.delete('autoSpeak'))
-        if (autoSpeak && mode === 'off') {
+        autoRead = value === 'on'
+        await (autoRead ? $.store.set('autoRead', true) : $.store.delete('autoRead'))
+        if (autoRead && mode === 'off') {
           // 開了卻沒聲音會讓人以為沒生效：這個 session 也跟著開始朗讀
-          await setMode($, 'speak')
+          await setMode($, 'read')
         }
       }
 
       return {
-        text: autoSpeak
-          ? '每個 session 都朗讀：開。之後新開的 session 會從 speak 開始（已開著的其他 session 要 /reload-plugins 才會跟上）；個別 session 仍可用 /saymend off 關掉。'
-          : '每個 session 都朗讀：關。之後新開的 session 從 off 開始；這個 session 目前的模式不變。',
+        text: autoRead
+          ? 'autoread: on. New sessions start in read (other open sessions follow after /reload-plugins); any session can still turn it off with /saymend off.'
+          : 'autoread: off. New sessions start in off; this session keeps its current mode.',
       }
     }
 
@@ -797,8 +834,8 @@ export const register: Register = on => {
 
       return {
         text: pin
-          ? '常駐狀態列：開。待命時也會顯示 Saymend 的狀態，以及這個 session 會不會朗讀與聆聽。'
-          : '常駐狀態列：關。只在朗讀、聆聽或熱鍵聽寫時顯示。',
+          ? 'pin: on. The status line stays while idle and shows the Saymend state and this session\'s mode, for example "idle｜read".'
+          : 'pin: off. The status line shows only while reading, listening or hotkey dictation.',
       }
     }
 
@@ -806,7 +843,7 @@ export const register: Register = on => {
       voice = value === '' || value === 'default' ? undefined : value
       await (voice === undefined ? $.store.delete('voice') : $.store.set('voice', voice))
 
-      return { text: `朗讀語音：${voice ?? '系統預設'}` }
+      return { text: `voice: ${voice ?? 'system default'}` }
     }
 
     if (verb === 'bin') {
@@ -816,7 +853,7 @@ export const register: Register = on => {
       isPresenceSupported = true
       restartWatcher($)
 
-      return { text: `saymend CLI：${bin}` }
+      return { text: `saymend CLI: ${bin}` }
     }
 
     if (verb === 'speaker') {
@@ -826,24 +863,24 @@ export const register: Register = on => {
       return {
         text:
           speaker === undefined
-            ? '朗讀：這台機器的系統語音。'
-            : `朗讀：交給 ${speaker}（文字從 stdin 進，介面同 macOS 的 say）。`,
+            ? "speaker: this machine's system voice."
+            : `speaker: ${speaker} (text on stdin, same interface as macOS say).`,
       }
     }
 
     if (verb === 'status') {
       return {
         text: [
-          `模式：${mode}（只在這個 session 有效）`,
-          `每個 session 都朗讀：${autoSpeak ? '開' : '關'}`,
-          `邊唸邊聽：${bargeIn ? '開' : '關'}`,
-          `潤飾：${polish ? '開' : '關'}`,
-          `常駐狀態列：${pin ? '開' : '關'}`,
-          `停頓視為說完：${pauseMs / 1000} 秒`,
-          `單段最長：${maxSeconds} 秒`,
-          `朗讀語音：${voice ?? '系統預設'}`,
-          `朗讀指令：${speaker ?? '這台機器的系統語音'}`,
-          `saymend CLI：${bin}`,
+          `mode: ${mode} (this session only)`,
+          `autoread: ${autoRead ? 'on' : 'off'}`,
+          `bargein: ${bargeIn ? 'on' : 'off'}`,
+          `polish: ${polish ? 'on' : 'off'}`,
+          `pin: ${pin ? 'on' : 'off'}`,
+          `silence: ${silenceMs / 1000}s`,
+          `limit: ${limitSeconds}s`,
+          `voice: ${voice ?? 'system default'}`,
+          `speaker: ${speaker ?? "this machine's system voice"}`,
+          `saymend CLI: ${bin}`,
           ...(await describeSaymend($)),
         ].join('\n'),
       }
@@ -883,7 +920,7 @@ export const register: Register = on => {
     if (mode !== 'off' && e.agentId === undefined && e.reason === 'answer') {
       // 不等朗讀結束：朗讀與聆聽在 hook 回傳之後繼續進行
       void afterTurn($, e.answer).catch(error => {
-        $.ui.toast(`語音處理失敗：${describe(error)}`)
+        $.ui.toast(`Voice handling failed: ${describe(error)}`)
       })
     }
 
