@@ -20,8 +20,9 @@
 //
 // 兩種使用情境：
 //   本機  Claude Code 與 Saymend 在同一台 Mac：直接執行 `saymend`，朗讀用引擎的系統語音。
-//   遠端  Claude Code 在 SSH 連過去的主機上：`bin` 與 `speaker` 指到 saymend-remote 的 client
-//         （見 remote/saymend_remote.py），聽寫與朗讀都轉回 Mac 執行。mod 的邏輯兩邊相同。
+//   遠端  Claude Code 在 SSH 連過去的主機上：`bin` 與 `speaker` 指到遠端的 client
+//         （由 Saymend.app 的「設定 › 遠端」安裝與連線，見 Saymend repo 的 docs/remote.md），
+//         聽寫與朗讀都轉回 Mac 執行。mod 的邏輯兩邊相同。
 
 import type { EngineInterface, ProcessSpawnResult, Register } from 'claude-code'
 
@@ -71,7 +72,7 @@ let voice: string | undefined
 let bin = 'saymend'
 /**
  * 朗讀改用這個外部指令（介面同 macOS 的 `say`：`[-v 語音]`，文字從 stdin 進）。
- * 沒設定就用引擎的系統語音。遠端使用時設成 saymend-remote 的 `say` client。
+ * 沒設定就用引擎的系統語音。遠端使用時設成遠端 client 的 `say`。
  */
 let speaker: string | undefined
 /** 邊唸邊聽：迴圈模式下朗讀時就開麥，開口即打斷。 */
@@ -394,7 +395,7 @@ async function listen(
         : '沒有聽到內容',
     )
   } else if (code === 3) {
-    // `unreachable` 是 saymend-remote 的 client 回的：問題在橋接，不是 Saymend 沒開
+    // `unreachable` 是遠端 client 回的：問題在回 Mac 的連線，不是 Saymend 沒開
     $.ui.toast(errorCode === 'unreachable' && errorMessage !== '' ? errorMessage : 'Saymend 沒有在執行')
   } else if (code === 4) {
     $.ui.toast('Saymend 正在進行另一段聽寫')
@@ -578,7 +579,7 @@ type SaymendStatus = {
   app?: string
   state?: string
   modelReady?: boolean
-  /** saymend-remote 的 client 連不上 Mac 時附的原因 */
+  /** 遠端 client 連不上 Mac 時附的原因 */
   message?: string
   presence?: unknown
 }

@@ -13,12 +13,12 @@ The mod's code runs on the machine where Claude Code runs. The microphone, the s
 | Where Claude Code runs | Your Mac | A host you reach over SSH (Linux works too) |
 | Dictation | The mod runs the `saymend` CLI directly | The mod runs a client on the remote host, which goes back over SSH to run the `saymend` CLI on the Mac |
 | Reading aloud | Claude Code speaks with the system voice | The mod runs a client on the remote host, which goes back over SSH to speak with `say` on the Mac |
-| Extra setup | None | Run `saymend-remote` on the Mac (see below) |
+| Extra setup | None | Add the host under Settings › Remote in Saymend and connect (see below) |
 
 ```
 local    Claude Code (mod) ──▶ saymend CLI ──▶ Saymend.app
 
-remote   Claude Code (mod) ──▶ client ══ SSH ══▶ saymend-remote ──▶ saymend CLI, say
+remote   Claude Code (mod) ──▶ client ══ SSH ══▶ Saymend.app ──▶ microphone, speakers
          └──── remote host ────┘              └──────────── your Mac ────────────┘
 ```
 
@@ -48,67 +48,52 @@ Once the mod is installed it works with no further setup. The mod talks to Sayme
 
 ## Scenario 2: remote
 
-> This scenario is experimental.
+Saymend.app manages the connection, installs the client on the remote host and reconnects by itself. You do not keep a terminal open, and nothing else needs to be installed on the Mac.
 
 Requirements:
 
-- Mac: everything in scenario 1, plus `python3` and `ssh` access to the remote host.
+- Mac: everything in scenario 1, with a Saymend version whose settings have a Remote tab (0.2.0 or later). `ssh` must log in to the host without asking for a password (a key or ssh-agent). For a host you have never connected to, run `ssh` once in a terminal first to accept its host key.
 - Remote host: `python3` (3.8 or later), an `sshd` that allows forwarding (the default), and this mod installed in Claude Code.
 
 Steps:
 
-1. On the Mac, get `saymend-remote` (a single file that uses only the Python standard library):
-
-   ```
-   curl -fsSL https://raw.githubusercontent.com/eugenechen0514/claude-code-mods/main/mods/saymend-voice/remote/saymend_remote.py -o ~/.local/bin/saymend-remote
-   chmod +x ~/.local/bin/saymend-remote
-   ```
-
-2. On the Mac, run this in a terminal window and leave it open:
-
-   ```
-   saymend-remote connect user@host
-   ```
-
-   Hosts are written the way `ssh` takes them, and you can name several. It puts the client in `~/.saymend-remote/` on the remote host, then sets up SSH forwarding, and reconnects by itself when the connection drops.
-
-3. Once connected it prints two commands. Run them once in Claude Code on the remote host (the settings are kept):
+1. Open Settings › Remote in Saymend and add a host. You can pick one from `~/.ssh/config`, or enter the host, port and user by hand.
+2. Turn on the connection switch for that host; its state becomes connected. Saymend puts the client in `~/.saymend-remote/` on the remote host, then sets up SSH forwarding, and reconnects by itself when the connection drops.
+3. Once connected it shows two commands. Copy them and run them once in Claude Code on the remote host (the settings are kept):
 
    ```
    /saymend bin /home/user/.saymend-remote/bin/saymend
    /saymend speaker /home/user/.saymend-remote/bin/say
    ```
 
-4. In Claude Code on the remote host, enter `/saymend status`. When the last line shows Saymend's state (for example `idle`), the path works.
+4. In Claude Code on the remote host, enter `/saymend status`. When it shows Saymend's state (for example `idle`), the path works.
 
-After that, each time you want to use it you only need step 2 on the Mac. While the bridge is not running, `/saymend` on the remote host reports that it cannot reach the Mac (the message is in Chinese).
+After that, turn the connection switch on whenever you want to use it, or tick the option to connect when the app starts. While the connection is off, `/saymend` on the remote host reports that it cannot reach the Mac (the message is in Chinese).
 
-When you no longer need it, restore the settings and remove the files on the remote host:
+When you no longer need it, restore the settings on the remote host, then use the button in Settings › Remote that removes the remote client:
 
 ```
 /saymend bin default
 /saymend speaker default
 ```
 
-```
-saymend-remote uninstall user@host
-```
+For every option in the settings tab, the SSH details and the wire format, see [docs/remote.md](https://github.com/eugenechen0514/saymend/blob/main/docs/remote.md) in the Saymend repo.
 
 ### Security
 
-`saymend-remote` lets a remote host make your Mac open its microphone and play sound. Know its limits first:
+A remote connection lets a remote host make your Mac open its microphone and play sound. Know its limits first:
 
-- **Connect only to hosts you trust, and not with an account several people share.** While the bridge is running, any program that runs under your account on the remote host (and that host's root) can ask the Mac to dictate an utterance and receive the text, and can make the Mac's speakers talk.
-- Dictation is always visible: Saymend shows its floating bar while recording, and Esc cancels it.
-- The bridge accepts only fixed requests: `saymend` with `status`, `dictate`, `stop`, `cancel`, `events` or `--version` (arguments are checked against an allowlist), and reading text aloud with `say`. It runs nothing else for the remote host.
-- The sockets on the Mac and on the remote host can be reached only by your account (mode 0600, in a 0700 folder). No TCP port is opened on the remote host.
-- The bridge window logs only the command name, the number of characters read aloud, and the exit code. It does not log what you said or what was read.
-- When you stop the bridge (Ctrl-C) or the SSH connection drops, a dictation in progress is cancelled and the microphone closes at once.
+- **Connect only to hosts you trust, and not with an account several people share.** While the connection is on, any program that runs under your account on the remote host (and that host's root) can ask the Mac to dictate an utterance and receive the text, and can make the Mac's speakers talk.
+- Dictation is always visible, and shows where it came from: for a dictation started remotely, Saymend's floating bar names the host, and Esc cancels it.
+- Saymend stores no password and no key. It only runs the system `ssh`, with your own SSH configuration and keys.
+- The remote host can send only fixed requests: `saymend` with `status`, `dictate`, `stop`, `cancel`, `events` or `--version` (arguments are checked against an allowlist), and reading text aloud with `say`. Saymend runs nothing else for the remote host.
+- The sockets on the Mac and on the remote host can be reached only by your account. No TCP port is opened on the remote host.
+- When you turn the connection switch off, quit Saymend, or the SSH connection drops, a dictation in progress is cancelled and the microphone closes at once.
 
 ### Known limits
 
-- Barge-in (`bargein`) reacts one SSH round trip later than it does locally.
-- `saymend-remote connect` opens three SSH connections each time it connects. If your SSH asks for a password or a code every time, set up a key or `ControlMaster` first.
+- Barge-in (`bargein`) has not been tried in the remote scenario yet. It relies on live state notifications to tell when you start speaking, and with an extra SSH round trip it may react more slowly than it does locally.
+- Saymend never asks for a password. If your SSH asks for a password or a code every time, set up a key or ssh-agent first.
 
 ## Commands
 
@@ -173,7 +158,4 @@ At the repository root, run:
 ```
 claude plugin validate mods/saymend-voice
 claude plugin test mods/saymend-voice
-python3 -m unittest discover -s mods/saymend-voice/remote -p 'test_*.py'
 ```
-
-The third line tests `remote/saymend_remote.py`: fake `saymend` and `say` programs stand in for the real ones, nothing goes over SSH, and no microphone is opened and no sound is played.

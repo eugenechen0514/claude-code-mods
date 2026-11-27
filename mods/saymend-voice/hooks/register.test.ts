@@ -78,7 +78,7 @@ type World = {
   newSession: () => void
 }
 
-/** 測試用的外部朗讀指令（實際使用時是 saymend-remote 的 `say` client）。 */
+/** 測試用的外部朗讀指令（實際使用時是 Saymend 裝到遠端的 `say` client）。 */
 const SPEAKER = '/remote/.saymend-remote/bin/say'
 
 /**
@@ -743,7 +743,7 @@ test('外部朗讀指令：送出新的 prompt 會結束它；指令失敗則提
 
 test('遠端 client 連不上 Mac 時，/listen 與 /saymend status 顯示橋接的原因而不是「Saymend 沒有在執行」', async ($, on) => {
   const clock = mock.clock(on)
-  const reason = '連不上 Mac：saymend-remote 沒有在執行，或 SSH 連線中斷'
+  const reason = '連不上 Mac：Saymend 的遠端連線沒有開著，或 SSH 連線中斷'
   const seen = world(on, {
     dictate: {
       lines: [JSON.stringify({ v: 1, type: 'error', code: 'unreachable', message: reason })],
