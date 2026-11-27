@@ -53,17 +53,26 @@ const RETRY_MAX_MS = 60_000
 const KILLED: ProcessSpawnResult = { code: null, signal: 'SIGTERM' }
 
 const USAGE = [
-  '用法：/saymend [listen [edit]]　聽寫一段話並送出（不帶參數就是這個；/listen 是同一個動作）',
-  '　　　/saymend off|speak|loop|stop|status　模式只在這個 session 有效',
-  '　　　/saymend autospeak <on|off>　每個 session 一開始就朗讀回覆',
-  '　　　/saymend pause <秒>　　停頓多久視為說完（0.5–10，預設 1.5）',
-  '　　　/saymend max <秒>　　　單段最長可以講多久（10–3600，預設 120）',
-  '　　　/saymend bargein <on|off>　邊唸邊聽（需戴耳機）',
-  '　　　/saymend polish <on|off>　 送出前先經 Saymend 的 LLM 潤飾',
-  '　　　/saymend pin <on|off>　　　待命時也把 Saymend 的狀態留在狀態列',
-  '　　　/saymend voice <系統語音名稱|default>',
-  '　　　/saymend bin <saymend 路徑|default>',
-  '　　　/saymend speaker <朗讀指令|default>　遠端使用時，把朗讀轉回 Mac',
+  '聽寫',
+  '　/saymend　　　　　　　　　聽寫一段話，說完直接送出（/listen 是同一個動作）',
+  '　/saymend listen edit　　　聽寫後只填進輸入框，不送出',
+  '語音模式（三選一，只影響這個 session）',
+  '　/saymend off　　　　　　　不朗讀（預設）',
+  '　/saymend speak　　　　　　每則回覆結束後朗讀',
+  '　/saymend loop　　　　　　 朗讀後自動聆聽，說完自動送出',
+  '控制',
+  '　/saymend stop　　　　　　 中斷正在進行的朗讀與聆聽',
+  '　/saymend status　　　　　 顯示目前的模式與所有設定',
+  '設定（這台機器上的 session 共用）',
+  '　/saymend autospeak on|off　每個新 session 一開始就是 speak',
+  '　/saymend pause <秒>　　　　停頓多久視為說完（0.5–10，預設 1.5）',
+  '　/saymend max <秒>　　　　　單段最長可以講多久（10–3600，預設 120）',
+  '　/saymend bargein on|off　　邊唸邊聽：朗讀時就開麥，開口即打斷（需戴耳機）',
+  '　/saymend polish on|off　　 送出前先經 Saymend 的 LLM 潤飾',
+  '　/saymend pin on|off　　　　待命時也在狀態列顯示 Saymend 的狀態（預設開）',
+  '　/saymend voice <名稱|default>　　朗讀用的系統語音',
+  '　/saymend bin <路徑|default>　　　saymend CLI 的路徑（遠端使用時指到 client）',
+  '　/saymend speaker <指令|default>　朗讀改交給這個指令（遠端使用時指到 client）',
 ].join('\n')
 
 // ── 模組狀態（reload 後歸零；設定值從 $.store 讀回） ──

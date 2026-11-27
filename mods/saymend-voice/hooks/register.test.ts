@@ -959,3 +959,22 @@ test('舊版 Saymend 不認得 --presence：自動退回不帶參數，照常監
   await $.command.run({ ...TYPED, command: 'saymend', args: 'bin default' })
   stream.open()
 })
+
+test('不認得的子指令會列出說明：每個指令各一行，分成聽寫、語音模式、控制、設定四組', async ($, on) => {
+  world(on)
+
+  await $.session.start(START)
+  const help = await $.command.run({ ...TYPED, command: 'saymend', args: 'help' })
+  const lines = (help.text ?? '').split('\n')
+
+  expect(lines.filter(line => !line.startsWith('　'))).toEqual([
+    '聽寫',
+    '語音模式（三選一，只影響這個 session）',
+    '控制',
+    '設定（這台機器上的 session 共用）',
+  ])
+  // off、speak、loop、stop、status 各自有一行說明，不擠在同一行
+  for (const verb of ['off', 'speak', 'loop', 'stop', 'status']) {
+    expect(lines.filter(line => line.startsWith(`　/saymend ${verb}　`))).toHaveLength(1)
+  }
+})
