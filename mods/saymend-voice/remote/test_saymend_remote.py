@@ -67,6 +67,8 @@ class ValidateArgs(unittest.TestCase):
         for args in (
             ['status', '--json'],
             ['events', '--json'],
+            ['events', '--json', '--presence', 'loop'],
+            ['events', '--presence=loop'],
             ['cancel'],
             ['stop', '--json'],
             ['--version'],
@@ -85,6 +87,9 @@ class ValidateArgs(unittest.TestCase):
             ['dictate', '--silence-ms', 'abc'],
             ['dictate', '--max-seconds=-1'],
             ['status', '--polish'],
+            ['status', '--presence', 'loop'],
+            ['events', '--presence'],
+            ['events', '--presence', 'LOOP; rm -rf'],
             ['status', '--max-seconds', '3'],
             'status',
             ['status', 1],

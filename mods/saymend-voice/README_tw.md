@@ -127,7 +127,7 @@ saymend-remote uninstall user@host
 | `/saymend max <秒>` | 單段最長可以講多久（10–3600，預設 120） |
 | `/saymend bargein <on\|off>` | 邊唸邊聽：朗讀時就開麥，開口即打斷（需戴耳機） |
 | `/saymend polish <on\|off>` | 送出前先經 Saymend 設定的 LLM 潤飾 |
-| `/saymend pin <on\|off>` | 待命時也把 Saymend 的狀態與語音模式留在狀態列（預設關：只在朗讀、聆聽或熱鍵聽寫時顯示） |
+| `/saymend pin <on\|off>` | 待命時也把狀態留在狀態列（預設開；關掉後只在朗讀、聆聽或熱鍵聽寫時顯示） |
 | `/saymend voice <名稱\|default>` | 指定朗讀用的系統語音（遠端情境下是 Mac 的語音） |
 | `/saymend bin <路徑\|default>` | 指定 `saymend` CLI 的路徑；遠端情境指到 client |
 | `/saymend speaker <指令\|default>` | 朗讀改交給這個指令；遠端情境指到 client。`default` 回到這台機器的系統語音 |
@@ -139,6 +139,23 @@ saymend-remote uninstall user@host
 其餘設定（`autospeak`、`pause`、`max`、`bargein`、`polish`、`pin`、`voice`、`bin`、`speaker`）存在 mod 自己的 store，整台機器上的 session 共用，跨 session 保留。每台機器各存各的，所以本機和遠端的設定互不影響。
 
 `speaker` 指令的介面和 macOS 的 `say` 相同：`<指令> [-v 語音]`，要唸的文字從 stdin 進來，朗讀被中斷時行程會被結束。
+
+## 狀態列
+
+待命時狀態列會留一行，告訴你 Saymend 連不連得上，以及**眼前這個 session** 會做什麼：
+
+```
+Saymend 待命｜這個 session：不朗讀
+Saymend 待命｜這個 session：朗讀
+Saymend 待命｜這個 session：朗讀＋聆聽｜共 2 個 session 開著 loop
+Saymend 未連線｜這個 session：不朗讀
+```
+
+- 「不朗讀」「朗讀」「朗讀＋聆聽」分別對應 `off`、`speak`、`loop`。
+- 有別的 session 也開著 `loop` 時，後面會多一段數量。Saymend 一次只收一段聽寫，同時開著兩個 `loop`，你說的話只會送進先開麥的那一個，所以 `loop` 建議一次只在一個 session 開。下 `/saymend loop` 時如果已經有別的 session 開著，也會當場提醒。
+- 數量由 Saymend 統計，所以本機和遠端的 session 會算在一起。這需要支援 `events --presence` 的 Saymend 版本；較舊的版本不顯示數量，其他功能照常。
+- 非互動的 session（例如 `claude -p`）不會為了這一行去連 Saymend。
+- 不想常駐就 `/saymend pin off`。
 
 ## 行為說明
 

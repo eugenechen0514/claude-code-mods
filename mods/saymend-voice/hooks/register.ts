@@ -3,6 +3,8 @@
 // 跟 Saymend 的唯一介面是 `saymend` CLI（契約 v1）：
 //   saymend dictate --json …  聽寫一段，結果只回傳、不上屏
 //   saymend events --json     長駐串流，回報所有來源的聽寫狀態
+//     --presence loop         （較新的 Saymend）宣告這個 session 開著 loop；
+//                             事件會帶 `presence`，是所有 session 的統計
 //   saymend cancel            丟棄目前 CLI 來源的聽寫
 //   saymend status --json     目前狀態
 //
@@ -76,8 +78,8 @@ let speaker: string | undefined
 let bargeIn = false
 /** 送出前先讓 Saymend 用設定中的 LLM provider 潤飾（`dictate --polish`）。 */
 let polish = false
-/** 待命時也把 Saymend 的狀態留在 status line（預設關：只在做事時顯示） */
-let pin = false
+/** 待命時也把 Saymend 的狀態留在 status line（預設開；關掉後只在做事時顯示） */
+let pin = true
 /** 新 session 的起始模式是 speak 而不是 off（預設關） */
 let autoSpeak = false
 let pauseMs = DEFAULT_PAUSE_MS
@@ -92,8 +94,17 @@ type Listening = {
 }
 let listening: Listening | null = null
 let isWatching = false
+/** 目前這條 `saymend events` 連線：宣告的 presence tag，以及結束它的方法。 */
+let watching: { tag: string | undefined; kill: () => void } | null = null
+/** 每次重開監看就加一；舊的那一輪看到數字變了就自己收掉。 */
+let watchEpoch = 0
+let retryDelay = RETRY_MS
 /** Saymend 目前狀態；`unknown` 表示連不上 app。 */
 let saymendState = 'unknown'
+/** 所有連到這個 Saymend 的 session 裡，有幾個開著 loop；Saymend 沒回報就是 undefined。 */
+let loopSessions: number | undefined
+/** `saymend events --presence` 能不能用；舊版 CLI 不認得這個參數（exit 2），試過一次就不再帶。 */
+let isPresenceSupported = true
 /** Saymend 正在處理一段聽寫的狀態（契約 v1 的 `state`）。 */
 const BUSY_STATES: ReadonlySet<string> = new Set(['recording', 'transcribing', 'polishing'])
 
@@ -125,7 +136,7 @@ async function load($: EngineInterface): Promise<void> {
   speaker = typeof storedSpeaker === 'string' && storedSpeaker !== '' ? storedSpeaker : undefined
   bargeIn = (await $.store.get('bargeIn')) === true
   polish = (await $.store.get('polish')) === true
-  pin = (await $.store.get('pin')) === true
+  pin = (await $.store.get('pin')) !== false
   pauseMs = within(await $.store.get('pauseMs'), PAUSE_MIN_MS, PAUSE_MAX_MS) ?? DEFAULT_PAUSE_MS
   maxSeconds =
     within(await $.store.get('maxSeconds'), MAX_SECONDS_MIN, MAX_SECONDS_MAX) ??
@@ -153,12 +164,30 @@ function refreshStatus($: EngineInterface): void {
     // 不是這個 mod 發起的聽寫：使用者按了 Saymend 熱鍵
     $.ui.status('Saymend 熱鍵聽寫中…')
   } else if (pin) {
-    // 常駐：待命時也留一行，看得到 Saymend 連不連得上、目前是哪個語音模式
+    // 常駐：待命時也留一行，看得到 Saymend 連不連得上、這個 session 會不會朗讀與聆聽
     const state = saymendState === 'idle' ? '待命' : saymendState === 'unknown' ? '未連線' : saymendState
-    $.ui.status(`Saymend ${state}｜語音模式 ${mode}`)
+    const role = mode === 'loop' ? '朗讀＋聆聽' : mode === 'speak' ? '朗讀' : '不朗讀'
+    const others = otherLoopSessions()
+    const crowd =
+      others === 0
+        ? ''
+        : mode === 'loop'
+          ? `｜共 ${others + 1} 個 session 開著 loop`
+          : `｜另有 ${others} 個 session 開著 loop`
+    $.ui.status(`Saymend ${state}｜這個 session：${role}${crowd}`)
   } else {
     $.ui.status(undefined)
   }
+}
+
+/** 這個 session 自己有沒有被算進 `loopSessions`（開著 loop，而且連線有宣告 presence）。 */
+function isCountedAsLoop(): boolean {
+  return mode === 'loop' && watching?.tag === 'loop'
+}
+
+/** 除了這個 session 以外，還有幾個 session 開著 loop；不知道就當成 0。 */
+function otherLoopSessions(total: number | undefined = loopSessions): number {
+  return total === undefined ? 0 : Math.max(0, total - (isCountedAsLoop() ? 1 : 0))
 }
 
 function stopSpeaking(): void {
@@ -392,53 +421,115 @@ function armNoSpeech($: EngineInterface, handle: Listening): void {
   })
 }
 
+/** 這個 session 的 events 連線該宣告什麼：開著 loop 才宣告，讓 Saymend 統計有幾個。 */
+function presenceTag(): string | undefined {
+  return mode === 'loop' && isPresenceSupported ? 'loop' : undefined
+}
+
+/** 從事件的 `presence` 讀出開著 loop 的 session 數；Saymend 沒這個欄位就是 undefined。 */
+function loopCount(presence: unknown): number | undefined {
+  if (typeof presence !== 'object' || presence === null) {
+    return undefined
+  }
+  const count = (presence as { loop?: unknown }).loop
+
+  return typeof count === 'number' ? count : 0
+}
+
 /**
  * 監看 Saymend 的聽寫狀態：使用者一開始說話（熱鍵或 CLI）就中斷朗讀。
  * 啟動後持續到模組卸載；app 沒開時會以加倍的間隔重試。
  */
 function startWatcher($: EngineInterface): void {
   if (isWatching) {
+    // 已經在監看：模式變了的話，連線宣告的 presence 要跟著換
+    if (watching !== null && watching.tag !== presenceTag()) {
+      restartWatcher($)
+    }
+
     return
   }
   isWatching = true
-  let delay = RETRY_MS
+  void watch($, watchEpoch)
+}
 
-  async function run(): Promise<void> {
-    try {
-      const child = $.process.spawn({ argv: [bin, 'events', '--json'] })
-      child.result.catch(() => undefined)
-      const read = createLineReader()
-      for await (const piece of child) {
-        if (piece.stream !== 'stdout') {
+/** 馬上重開監看（換了 presence 或換了 `bin`），不等重試的間隔。 */
+function restartWatcher($: EngineInterface): void {
+  if (!isWatching) {
+    return
+  }
+  watchEpoch += 1
+  retryDelay = RETRY_MS
+  watching?.kill()
+  void watch($, watchEpoch)
+}
+
+async function watch($: EngineInterface, epoch: number): Promise<void> {
+  if (epoch !== watchEpoch) {
+    return
+  }
+  const tag = presenceTag()
+  let code: number | null = null
+  let own: typeof watching = null
+  try {
+    const child = $.process.spawn({
+      argv: [bin, 'events', '--json', ...(tag === undefined ? [] : ['--presence', tag])],
+    })
+    child.result.catch(() => undefined)
+    own = {
+      tag,
+      kill: () => {
+        void child.return(KILLED).catch(() => undefined)
+      },
+    }
+    watching = own
+    const read = createLineReader()
+    for await (const piece of child) {
+      if (piece.stream !== 'stdout') {
+        continue
+      }
+      for (const line of read(piece.text)) {
+        const event = parseEvent(line)
+        if (event?.type !== 'state' || event.state === undefined) {
           continue
         }
-        for (const line of read(piece.text)) {
-          const event = parseEvent(line)
-          if (event?.type !== 'state' || event.state === undefined) {
-            continue
-          }
-          delay = RETRY_MS
-          saymendState = event.state
-          // 自己發起的 CLI 聽寫由 listen 決定何時停朗讀（邊唸邊聽時要等開口）
-          const isOwn = event.source === 'cli' && listening !== null
-          if (event.state === 'recording' && !isOwn) {
-            stopSpeaking()
-          }
-          refreshStatus($)
+        retryDelay = RETRY_MS
+        saymendState = event.state
+        loopSessions = loopCount(event.presence)
+        // 自己發起的 CLI 聽寫由 listen 決定何時停朗讀（邊唸邊聽時要等開口）
+        const isOwn = event.source === 'cli' && listening !== null
+        if (event.state === 'recording' && !isOwn) {
+          stopSpeaking()
         }
+        refreshStatus($)
       }
-    } catch {
-      // CLI 不存在或無法啟動：當成連不上，稍後再試
     }
-    saymendState = 'unknown'
-    refreshStatus($)
-    $.clock.after(delay, () => {
-      void run()
-    })
-    delay = Math.min(delay * 2, RETRY_MAX_MS)
+    code = (await child.result).code
+  } catch {
+    // CLI 不存在或無法啟動：當成連不上，稍後再試
   }
+  if (watching === own) {
+    watching = null
+  }
+  if (epoch !== watchEpoch) {
+    // 已經被 restartWatcher 換掉，新的那一輪在跑了
+    return
+  }
+  if (tag !== undefined && code === 2) {
+    // 舊版 CLI 不認得 --presence（用法錯誤）：之後不帶這個參數，馬上重連
+    isPresenceSupported = false
+    void watch($, epoch)
 
-  void run()
+    return
+  }
+  saymendState = 'unknown'
+  loopSessions = undefined
+  refreshStatus($)
+  const delay = retryDelay
+  retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS)
+  $.clock.after(delay, () => {
+    void watch($, epoch)
+  })
 }
 
 async function setMode($: EngineInterface, next: Mode): Promise<void> {
@@ -447,7 +538,9 @@ async function setMode($: EngineInterface, next: Mode): Promise<void> {
   if (next === 'off') {
     stopSpeaking()
     listening?.cancel()
-  } else {
+  }
+  if (next !== 'off' || isWatching) {
+    // 沒在監看就開始；已經在監看則視需要換 presence（開關 loop）
     startWatcher($)
   }
   refreshStatus($)
@@ -481,26 +574,54 @@ async function afterTurn($: EngineInterface, answer: string): Promise<void> {
   }
 }
 
-async function saymendStatus($: EngineInterface): Promise<string> {
-  try {
-    const ran = await $.process.run([bin, 'status', '--json'], { timeoutMs: 5000 })
-    const status: unknown = JSON.parse(ran.stdout.trim().split('\n')[0] ?? '')
-    const fields = status as {
-      app?: string
-      state?: string
-      modelReady?: boolean
-      message?: string
-    }
-    if (fields.app !== 'running') {
-      // saymend-remote 的 client 連不上 Mac 時會附上原因
-      return typeof fields.message === 'string' && fields.message !== ''
-        ? fields.message
-        : '沒有在執行'
-    }
+type SaymendStatus = {
+  app?: string
+  state?: string
+  modelReady?: boolean
+  /** saymend-remote 的 client 連不上 Mac 時附的原因 */
+  message?: string
+  presence?: unknown
+}
 
-    return `${fields.state ?? '未知'}${fields.modelReady === false ? '（model 未就緒）' : ''}`
+/** 問一次 `saymend status --json`；問不到就丟出錯誤。 */
+async function readStatus($: EngineInterface): Promise<SaymendStatus> {
+  const ran = await $.process.run([bin, 'status', '--json'], { timeoutMs: 5000 })
+  const status: unknown = JSON.parse(ran.stdout.trim().split('\n')[0] ?? '')
+
+  return typeof status === 'object' && status !== null ? (status as SaymendStatus) : {}
+}
+
+/** `/saymend status` 用的兩行：Saymend 的狀態，以及開著 loop 的 session 數。 */
+async function describeSaymend($: EngineInterface): Promise<string[]> {
+  try {
+    const fields = await readStatus($)
+    if (fields.app !== 'running') {
+      return [
+        `Saymend：${
+          typeof fields.message === 'string' && fields.message !== '' ? fields.message : '沒有在執行'
+        }`,
+      ]
+    }
+    const total = loopCount(fields.presence)
+
+    return [
+      `Saymend：${fields.state ?? '未知'}${fields.modelReady === false ? '（model 未就緒）' : ''}`,
+      `開著 loop 的 session：${total === undefined ? '無法得知（Saymend 版本較舊）' : String(total)}`,
+    ]
   } catch (error) {
-    return `無法取得（${describe(error)}）`
+    return [`Saymend：無法取得（${describe(error)}）`]
+  }
+}
+
+/** 開 loop 之前：還有幾個別的 session 已經開著 loop。沒在監看就問 Saymend 一次。 */
+async function countOtherLoops($: EngineInterface): Promise<number> {
+  if (loopSessions !== undefined) {
+    return otherLoopSessions()
+  }
+  try {
+    return otherLoopSessions(loopCount((await readStatus($)).presence))
+  } catch {
+    return 0
   }
 }
 
@@ -540,7 +661,8 @@ export const register: Register = on => {
       description: '用 Saymend 聽寫一段話並直接送出（加 edit 只填入輸入框，不送出；同 /saymend listen）',
       argumentHint: '[edit]',
     })
-    if (mode !== 'off' || pin) {
+    // 常駐狀態列只對有人在看的 session 有意義；非互動的 session 不為了它一直連著 Saymend
+    if (mode !== 'off' || (pin && e.isInteractive)) {
       startWatcher($)
     }
     refreshStatus($)
@@ -559,6 +681,8 @@ export const register: Register = on => {
     }
 
     if (verb === 'off' || verb === 'speak' || verb === 'loop') {
+      // 要在切換之前數：切換後自己也會被算進去
+      const others = verb === 'loop' ? await countOtherLoops($) : 0
       await setMode($, verb)
       const note = {
         off: '這個 session 的語音已關閉。',
@@ -566,7 +690,12 @@ export const register: Register = on => {
         loop: '這個 session 的語音迴圈已開啟：朗讀後自動聆聽，說完自動送出。說「停止語音」可結束迴圈。',
       }
 
-      return { text: note[verb] }
+      const warning =
+        others > 0
+          ? `\n注意：另有 ${others} 個 session 也開著 loop。Saymend 一次只收一段聽寫，你說的話只會送進先開麥的那一個。`
+          : ''
+
+      return { text: note[verb] + warning }
     }
 
     if (verb === 'stop') {
@@ -648,7 +777,7 @@ export const register: Register = on => {
     if (verb === 'pin') {
       if (value === 'on' || value === 'off') {
         pin = value === 'on'
-        await $.store.set('pin', pin)
+        await (pin ? $.store.delete('pin') : $.store.set('pin', false))
         if (pin) {
           // 語音模式關著時原本不監看 Saymend；要常駐顯示就得一直監看
           startWatcher($)
@@ -658,7 +787,7 @@ export const register: Register = on => {
 
       return {
         text: pin
-          ? '常駐狀態列：開。待命時也會顯示 Saymend 的狀態與語音模式。'
+          ? '常駐狀態列：開。待命時也會顯示 Saymend 的狀態，以及這個 session 會不會朗讀與聆聽。'
           : '常駐狀態列：關。只在朗讀、聆聽或熱鍵聽寫時顯示。',
       }
     }
@@ -673,6 +802,9 @@ export const register: Register = on => {
     if (verb === 'bin') {
       bin = value === '' || value === 'default' ? 'saymend' : value
       await (bin === 'saymend' ? $.store.delete('bin') : $.store.set('bin', bin))
+      // 換了 CLI：能力要重新試，監看也馬上改用新的那一支（不等重試間隔）
+      isPresenceSupported = true
+      restartWatcher($)
 
       return { text: `saymend CLI：${bin}` }
     }
@@ -702,7 +834,7 @@ export const register: Register = on => {
           `朗讀語音：${voice ?? '系統預設'}`,
           `朗讀指令：${speaker ?? '這台機器的系統語音'}`,
           `saymend CLI：${bin}`,
-          `Saymend：${await saymendStatus($)}`,
+          ...(await describeSaymend($)),
         ].join('\n'),
       }
     }

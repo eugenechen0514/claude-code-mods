@@ -61,6 +61,8 @@ export type SaymendEvent = {
   source?: string | null
   code?: string
   message?: string
+  /** 各 presence tag 目前有幾條 events 連線宣告（較新的 Saymend 才有） */
+  presence?: Record<string, number>
 }
 
 /**

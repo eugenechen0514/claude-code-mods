@@ -55,6 +55,8 @@ SUBCOMMANDS = ('status', 'dictate', 'stop', 'cancel', 'events', '--version')
 #: 只有 dictate 收的、後面要帶數字的參數
 DICTATE_VALUE_FLAGS = ('--max-seconds', '--silence-ms', '--no-speech-seconds')
 NUMBER = re.compile(r'^\d+(\.\d+)?$')
+#: `events --presence <tag>` 的 tag（mod 目前只用 loop）
+PRESENCE_TAG = re.compile(r'^[a-z0-9_-]{1,32}$')
 #: 系統語音名稱：字母、數字、空白與少數標點（例如「Meijia」「Samantha (Enhanced)」）
 VOICE = re.compile(r'^[\w .()\-]{1,64}$')
 
@@ -76,6 +78,7 @@ def validate_saymend_args(args: object) -> str | None:
         return f'只接受這些子指令：{"、".join(SUBCOMMANDS)}'
 
     is_dictate = args[0] == 'dictate'
+    is_events = args[0] == 'events'
     rest = args[1:]
     index = 0
     while index < len(rest):
@@ -86,6 +89,15 @@ def validate_saymend_args(args: object) -> str | None:
         if is_dictate and arg == '--polish':
             continue
         name, has_value, value = arg.partition('=')
+        if is_events and name == '--presence':
+            if not has_value:
+                if index >= len(rest):
+                    return '--presence 後面要有 tag'
+                value = rest[index]
+                index += 1
+            if PRESENCE_TAG.match(value) is None:
+                return '--presence 的 tag 不合法'
+            continue
         if is_dictate and name in DICTATE_VALUE_FLAGS:
             if not has_value:
                 if index >= len(rest):

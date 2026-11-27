@@ -104,8 +104,13 @@ function world(
     speakerError?: string
     /** `saymend status --json` 的 stdout */
     status?: string
-    /** 一開始 `$.store` 裡已經有的設定（例如舊版留下的） */
+    /**
+     * 一開始 `$.store` 裡已經有的設定（例如舊版留下的）。
+     * 沒指定 `pin` 時這裡當成關著：多數測試不想要常駐狀態列與一直開著的 events 連線。
+     */
     stored?: Record<string, unknown>
+    /** 舊版 saymend CLI：不認得 `events --presence`，以用法錯誤（exit 2）結束 */
+    oldCli?: boolean
   } = {},
 ): World {
   const seen: World = {
@@ -127,7 +132,7 @@ function world(
   /** `$.state`：引擎替這個 session 保管的值 */
   const held = new Map<string, { value: unknown; version: number }>()
 
-  mock.store(on, script.stored)
+  mock.store(on, { pin: false, ...script.stored })
   on('state.get', (_, e) => ({ value: held.get(e.key) ?? { value: undefined, version: 0 } }))
   on('state.set', (_, e) => {
     const version = (held.get(e.key)?.version ?? 0) + 1
@@ -201,6 +206,14 @@ function world(
       return { value: { code: 0, signal: null } }
     }
     if (e.argv[1] === 'events') {
+      if (script.oldCli === true && e.argv.includes('--presence')) {
+        yield {
+          stream: 'stdout' as const,
+          text: '{"v":1,"type":"error","code":"usage","message":"未知選項：--presence"}\n',
+        }
+
+        return { value: { code: 2, signal: null } }
+      }
       for (const line of script.events ?? []) {
         yield { stream: 'stdout' as const, text: `${line}\n` }
       }
@@ -643,11 +656,11 @@ test('/saymend pin on：待命時也顯示 Saymend 狀態與語音模式；off �
   await clock.settle()
   expect(reply.text).toContain('常駐狀態列：開')
   expect(seen.spawned.some(argv => argv[1] === 'events')).toBe(true)
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜語音模式 off')
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：不朗讀')
 
   await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
   await clock.settle()
-  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜語音模式 speak')
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀')
 
   await $.command.run({ ...TYPED, command: 'saymend', args: 'pin off' })
   await clock.settle()
@@ -663,7 +676,7 @@ test('/saymend pin on：Saymend 連不上時顯示未連線', async ($, on) => {
   await $.command.run({ ...TYPED, command: 'saymend', args: 'pin on' })
   await clock.settle()
 
-  expect(seen.statuses.at(-1)).toBe('Saymend 未連線｜語音模式 off')
+  expect(seen.statuses.at(-1)).toBe('Saymend 未連線｜這個 session：不朗讀')
 })
 
 
@@ -833,4 +846,116 @@ test('新 session 的起始模式不會是 loop；舊版存在 store 的模式�
   await $.session.start(START)
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
   expect(status.text).toContain('模式：speak')
+})
+
+// ── 常駐狀態列預設開、開著 loop 的 session 數 ──
+
+test('常駐狀態列預設開：互動的 session 一開始就監看 Saymend；非互動的 session 不監看', async ($, on) => {
+  const clock = mock.clock(on)
+  const stream = gate()
+  const seen = world(on, {
+    stored: { pin: undefined },
+    events: ['{"v":1,"type":"state","state":"idle","source":null}'],
+    hold: stream.promise,
+  })
+
+  await $.session.start({ ...START, isInteractive: false })
+  await clock.settle()
+  expect(seen.spawned.some(argv => argv[1] === 'events')).toBe(false)
+
+  seen.newSession()
+  await $.session.start(START)
+  await clock.settle()
+  expect(seen.spawned.some(argv => argv[1] === 'events')).toBe(true)
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：不朗讀')
+
+  // 關掉之後只在做事時顯示
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'pin off' })
+  expect(seen.statuses.at(-1)).toBeUndefined()
+  stream.open()
+})
+
+test('開著 loop 的 session 向 Saymend 宣告 presence；狀態列顯示共有幾個，關掉 loop 就不再宣告', async ($, on) => {
+  const clock = mock.clock(on)
+  const stream = gate()
+  const seen = world(on, {
+    stored: { pin: true },
+    // Saymend 回報：連同這個 session，共有 2 個開著 loop
+    events: ['{"v":1,"type":"state","state":"idle","source":null,"presence":{"loop":2}}'],
+    hold: stream.promise,
+    dictate: { lines: [], code: 6 },
+  })
+  const eventStreams = (): string[][] => seen.spawned.filter(argv => argv[1] === 'events')
+
+  await $.session.start(START)
+  await clock.settle()
+  expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json'])
+  // 這個 session 沒開 loop：那 2 個都是別人
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：不朗讀｜另有 2 個 session 開著 loop')
+
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
+  await clock.settle()
+  expect(reply.text).toContain('另有 2 個 session 也開著 loop')
+  expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json', '--presence', 'loop'])
+  // 開了 loop 之後自己也算在裡面
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀＋聆聽｜共 2 個 session 開著 loop')
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await clock.settle()
+  expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json'])
+  stream.open()
+})
+
+test('只有自己開著 loop 時不顯示數量，開 loop 也不提醒', async ($, on) => {
+  const clock = mock.clock(on)
+  const stream = gate()
+  const seen = world(on, {
+    stored: { pin: true },
+    events: ['{"v":1,"type":"state","state":"idle","source":null,"presence":{}}'],
+    hold: stream.promise,
+    status: '{"v":1,"app":"running","state":"idle","source":null,"modelReady":true,"presence":{}}\n',
+  })
+
+  await $.session.start(START)
+  await clock.settle()
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
+  await clock.settle()
+
+  expect((reply.text ?? '').includes('注意')).toBe(false)
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀＋聆聽')
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain('開著 loop 的 session：0')
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+  stream.open()
+})
+
+test('舊版 Saymend 不認得 --presence：自動退回不帶參數，照常監看，也不顯示數量', async ($, on) => {
+  const clock = mock.clock(on)
+  const stream = gate()
+  const seen = world(on, {
+    stored: { pin: true },
+    oldCli: true,
+    events: ['{"v":1,"type":"state","state":"idle","source":null}'],
+    hold: stream.promise,
+    status: '{"v":1,"app":"running","state":"idle","source":null,"modelReady":true}\n',
+  })
+  const eventStreams = (): string[][] => seen.spawned.filter(argv => argv[1] === 'events')
+
+  await $.session.start(START)
+  // 換一支 CLI 之後能力要重新試（同一個檔案裡前面的測試可能已經試過）
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'bin default' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
+  await clock.settle()
+
+  expect(eventStreams().some(argv => argv.includes('--presence'))).toBe(true)
+  expect(eventStreams().at(-1)).toEqual(['saymend', 'events', '--json'])
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜這個 session：朗讀＋聆聽')
+  expect(seen.toasts).toEqual([])
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain('開著 loop 的 session：無法得知')
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+  // 還原：讓後面的測試重新試 presence
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'bin default' })
+  stream.open()
 })

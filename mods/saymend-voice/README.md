@@ -127,7 +127,7 @@ saymend-remote uninstall user@host
 | `/saymend max <seconds>` | The longest a single utterance can run (10–3600, default 120) |
 | `/saymend bargein <on\|off>` | Barge-in: keep the microphone open while reading, and stop reading when you start speaking (headphones required) |
 | `/saymend polish <on\|off>` | Polish the text with the LLM configured in Saymend before sending |
-| `/saymend pin <on\|off>` | Keep Saymend's state and the voice mode on the status line while idle too (off by default: shown only while reading, listening or hotkey dictation) |
+| `/saymend pin <on\|off>` | Keep the status on the status line while idle too (on by default; when off it is shown only while reading, listening or hotkey dictation) |
 | `/saymend voice <name\|default>` | Choose the system voice used for reading (in the remote scenario, a voice on the Mac) |
 | `/saymend bin <path\|default>` | Set the path to the `saymend` CLI; in the remote scenario, point it at the client |
 | `/saymend speaker <command\|default>` | Hand reading to this command; in the remote scenario, point it at the client. `default` returns to this machine's system voice |
@@ -139,6 +139,23 @@ To have every session read aloud, turn on `/saymend autospeak on`: sessions you 
 The other settings (`autospeak`, `pause`, `max`, `bargein`, `polish`, `pin`, `voice`, `bin`, `speaker`) are kept in the mod's own store, shared by every session on the machine, and persist across sessions. Each machine keeps its own, so local and remote settings do not affect each other.
 
 A `speaker` command has the same interface as macOS `say`: `<command> [-v voice]`, with the text to read on stdin; the process is ended when reading is interrupted.
+
+## Status line
+
+While idle, the status line keeps one line that tells you whether Saymend can be reached and what **the session in front of you** will do (the text is in Chinese):
+
+```
+Saymend 待命｜這個 session：不朗讀
+Saymend 待命｜這個 session：朗讀
+Saymend 待命｜這個 session：朗讀＋聆聽｜共 2 個 session 開著 loop
+Saymend 未連線｜這個 session：不朗讀
+```
+
+- 「不朗讀」 (does not read), 「朗讀」 (reads) and 「朗讀＋聆聽」 (reads and listens) stand for `off`, `speak` and `loop`. 「待命」 is idle and 「未連線」 is not connected.
+- When another session also has `loop` on, a count follows. Saymend takes one dictation at a time, so with two sessions in `loop` what you say goes only to the one that opened the microphone first; keep `loop` on in one session at a time. `/saymend loop` also warns you on the spot when another session already has it on.
+- Saymend does the counting, so local and remote sessions are counted together. This needs a Saymend version that supports `events --presence`; with an older version the count is not shown and everything else works as before.
+- A non-interactive session (for example `claude -p`) does not connect to Saymend just for this line.
+- To stop keeping the line, use `/saymend pin off`.
 
 ## Behavior
 
