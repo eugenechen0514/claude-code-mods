@@ -117,9 +117,10 @@ saymend-remote uninstall user@host
 | `/listen` | 聽寫一段話，說完停頓後直接送出 |
 | `/listen edit` | 聽寫後只填進輸入框，不送出 |
 | `/saymend`、`/saymend listen [edit]` | 等同 `/listen [edit]`；`/saymend` 不帶參數就是聽寫並送出 |
-| `/saymend off` | 關閉語音（預設） |
-| `/saymend speak` | 每次回覆結束後朗讀 |
-| `/saymend loop` | 朗讀後自動聆聽，說完自動送出；說「停止語音」可結束迴圈 |
+| `/saymend off` | 關閉這個 session 的語音（預設） |
+| `/saymend speak` | 這個 session 每次回覆結束後朗讀 |
+| `/saymend loop` | 這個 session 朗讀後自動聆聽，說完自動送出；說「停止語音」可結束迴圈 |
+| `/saymend autospeak <on\|off>` | 每個 session 一開始就是 `speak`（預設關：新 session 從 `off` 開始） |
 | `/saymend stop` | 中斷目前的朗讀與聆聽 |
 | `/saymend status` | 顯示目前的模式與設定 |
 | `/saymend pause <秒>` | 停頓多久視為說完（0.5–10，預設 1.5） |
@@ -131,7 +132,11 @@ saymend-remote uninstall user@host
 | `/saymend bin <路徑\|default>` | 指定 `saymend` CLI 的路徑；遠端情境指到 client |
 | `/saymend speaker <指令\|default>` | 朗讀改交給這個指令；遠端情境指到 client。`default` 回到這台機器的系統語音 |
 
-設定存在 mod 自己的 store，跨 session 保留。每台機器各存各的，所以本機和遠端的設定互不影響。
+語音模式（`off`、`speak`、`loop`）只在下指令的那個 session 有效：你在一個 session 開了朗讀，同時開著的其他 session 和之後新開的 session 都不會跟著唸。mod 更新後 `/reload-plugins`，這個 session 的模式還在。
+
+想讓每個 session 都朗讀，開啟 `/saymend autospeak on`：之後新開的 session 會從 `speak` 開始，已經開著的其他 session 要 `/reload-plugins` 才會跟上，個別 session 仍可用 `/saymend off` 關掉。`loop` 不能設成起始模式，因為同時開著的 session 會搶同一支麥克風。
+
+其餘設定（`autospeak`、`pause`、`max`、`bargein`、`polish`、`pin`、`voice`、`bin`、`speaker`）存在 mod 自己的 store，整台機器上的 session 共用，跨 session 保留。每台機器各存各的，所以本機和遠端的設定互不影響。
 
 `speaker` 指令的介面和 macOS 的 `say` 相同：`<指令> [-v 語音]`，要唸的文字從 stdin 進來，朗讀被中斷時行程會被結束。
 

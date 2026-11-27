@@ -74,6 +74,8 @@ type World = {
   voiced: { argv: string[]; input?: string }[]
   /** 外部朗讀指令的行程被結束的次數 */
   voiceKilled: number
+  /** 模擬換到另一個 session：session 內的狀態（$.state）清空，$.store 留著 */
+  newSession: () => void
 }
 
 /** 測試用的外部朗讀指令（實際使用時是 saymend-remote 的 `say` client）。 */
@@ -102,6 +104,8 @@ function world(
     speakerError?: string
     /** `saymend status --json` 的 stdout */
     status?: string
+    /** 一開始 `$.store` 裡已經有的設定（例如舊版留下的） */
+    stored?: Record<string, unknown>
   } = {},
 ): World {
   const seen: World = {
@@ -116,9 +120,21 @@ function world(
     statuses: [],
     voiced: [],
     voiceKilled: 0,
+    newSession: () => {
+      held.clear()
+    },
   }
+  /** `$.state`：引擎替這個 session 保管的值 */
+  const held = new Map<string, { value: unknown; version: number }>()
 
-  mock.store(on)
+  mock.store(on, script.stored)
+  on('state.get', (_, e) => ({ value: held.get(e.key) ?? { value: undefined, version: 0 } }))
+  on('state.set', (_, e) => {
+    const version = (held.get(e.key)?.version ?? 0) + 1
+    held.set(e.key, { value: e.value, version })
+
+    return { value: { isSet: true, version } }
+  })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('ui.status', (_, e) => {
@@ -730,4 +746,91 @@ test('遠端 client 連不上 Mac 時，/listen 與 /saymend status 顯示橋接
 
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
   expect(status.text).toContain(`Saymend：${reason}`)
+})
+
+// ── 模式只在當下的 session 有效 ──
+
+const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
+
+test('模式只在當下的 session 有效：另一個 session 從 off 開始，同一個 session reload 後還在', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on)
+
+  await $.session.start(START)
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  expect(reply.text).toContain('這個 session')
+  await $.turn.complete({ ...TURN, answer: '第一則。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。'])
+
+  // 同一個 session 裡 mod 被 reload（例如更新後 /reload-plugins）：模式還在
+  await $.session.start(START)
+  await $.turn.complete({ ...TURN, answer: '第二則。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。', '第二則。'])
+
+  // 另一個 session：不會因為別的 session 開過朗讀就跟著唸
+  seen.newSession()
+  await $.session.start(START)
+  await $.turn.complete({ ...TURN, answer: '第三則。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。', '第二則。'])
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain('模式：off')
+})
+
+test('/saymend autospeak on：每個新 session 從 speak 開始，個別 session 仍可關掉；off 則回到從 off 開始', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on)
+
+  await $.session.start(START)
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'autospeak on' })
+  expect(reply.text).toContain('每個 session 都朗讀：開')
+  // 開的當下這個 session 也開始朗讀
+  await $.turn.complete({ ...TURN, answer: '第一則。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。'])
+
+  // 這個 session 自己關掉：只影響這個 session
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'off' })
+  await $.turn.complete({ ...TURN, answer: '不該唸。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。'])
+
+  // 新的 session 仍然從 speak 開始
+  seen.newSession()
+  await $.session.start(START)
+  await $.turn.complete({ ...TURN, answer: '第二則。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual(['第一則。', '第二則。'])
+
+  // 關掉選項：這個 session 的模式不變，之後的新 session 從 off 開始
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'autospeak off' })
+  const now = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(now.text).toContain('模式：speak')
+  expect(now.text).toContain('每個 session 都朗讀：關')
+  seen.newSession()
+  await $.session.start(START)
+  const later = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(later.text).toContain('模式：off')
+})
+
+test('新 session 的起始模式不會是 loop；舊版存在 store 的模式不再生效', async ($, on) => {
+  const clock = mock.clock(on)
+  // 舊版把模式存在 store：開一次，所有 session 都跟著開
+  const seen = world(on, { stored: { mode: 'loop' } })
+
+  await $.session.start(START)
+  await $.turn.complete({ ...TURN, answer: '不該唸。' })
+  await clock.settle()
+  expect(seen.spoken).toEqual([])
+  expect(seen.spawned.some(argv => argv[1] === 'dictate')).toBe(false)
+
+  // autospeak 開著時，在某個 session 開過 loop 也不會讓新 session 自動開麥
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'autospeak on' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
+  seen.newSession()
+  await $.session.start(START)
+  const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
+  expect(status.text).toContain('模式：speak')
 })

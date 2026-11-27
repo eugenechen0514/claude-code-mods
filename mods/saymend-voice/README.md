@@ -117,9 +117,10 @@ saymend-remote uninstall user@host
 | `/listen` | Dictate one utterance and send it as soon as you pause |
 | `/listen edit` | Dictate and only fill the prompt box, without sending |
 | `/saymend`, `/saymend listen [edit]` | The same as `/listen [edit]`; `/saymend` with no arguments dictates and sends |
-| `/saymend off` | Turn voice off (default) |
-| `/saymend speak` | Read each reply aloud when it finishes |
-| `/saymend loop` | After reading a reply, listen automatically and send what you say; say 「停止語音」 ("stop voice") to end the loop |
+| `/saymend off` | Turn voice off in this session (default) |
+| `/saymend speak` | In this session, read each reply aloud when it finishes |
+| `/saymend loop` | In this session, after reading a reply, listen automatically and send what you say; say 「停止語音」 ("stop voice") to end the loop |
+| `/saymend autospeak <on\|off>` | Start every session in `speak` (off by default: a new session starts in `off`) |
 | `/saymend stop` | Stop the current reading and listening |
 | `/saymend status` | Show the current mode and settings |
 | `/saymend pause <seconds>` | How long a pause counts as finished speaking (0.5–10, default 1.5) |
@@ -131,7 +132,11 @@ saymend-remote uninstall user@host
 | `/saymend bin <path\|default>` | Set the path to the `saymend` CLI; in the remote scenario, point it at the client |
 | `/saymend speaker <command\|default>` | Hand reading to this command; in the remote scenario, point it at the client. `default` returns to this machine's system voice |
 
-Settings are kept in the mod's own store and persist across sessions. Each machine keeps its own, so local and remote settings do not affect each other.
+The voice mode (`off`, `speak`, `loop`) applies only to the session where you set it: turning reading on in one session does not make other open sessions, or sessions you start later, read aloud. After the mod is updated and you run `/reload-plugins`, the session keeps its mode.
+
+To have every session read aloud, turn on `/saymend autospeak on`: sessions you start afterwards begin in `speak`, other sessions that are already open follow after `/reload-plugins`, and any one session can still turn it off with `/saymend off`. `loop` cannot be a starting mode, because sessions open at the same time would compete for the same microphone.
+
+The other settings (`autospeak`, `pause`, `max`, `bargein`, `polish`, `pin`, `voice`, `bin`, `speaker`) are kept in the mod's own store, shared by every session on the machine, and persist across sessions. Each machine keeps its own, so local and remote settings do not affect each other.
 
 A `speaker` command has the same interface as macOS `say`: `<command> [-v voice]`, with the text to read on stdin; the process is ended when reading is interrupted.
 

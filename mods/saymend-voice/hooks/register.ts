@@ -6,10 +6,12 @@
 //   saymend cancel            丟棄目前 CLI 來源的聽寫
 //   saymend status --json     目前狀態
 //
-// 模式（存在 $.store，跨 session 保留）：
+// 模式（存在 $.state，只在當下的 session 有效；其他設定存在 $.store，整台機器共用）：
 //   off   什麼都不做
 //   speak 每次回覆結束後朗讀
 //   loop  朗讀後自動聆聽，說完自動送出（免手動迴圈）
+// 新 session 從 off 開始；`autoSpeak` 開著時從 speak 開始。loop 不能當起始值：
+// 同時開著的 session 會搶同一支麥克風。
 //
 // 邊唸邊聽（bargeIn，預設關）：迴圈模式下朗讀一開始就同時開麥，使用者一開口
 // 就切掉朗讀。喇叭的聲音會被當成有人說話，所以只適合戴耳機時開。
@@ -21,9 +23,11 @@
 
 import type { EngineInterface, ProcessSpawnResult, Register } from 'claude-code'
 
+import type { Mode } from '../types'
 import { createLineReader, isStopPhrase, parseEvent, toSpeech } from './speech'
 
-type Mode = 'off' | 'speak' | 'loop'
+/** 這個 session 的語音模式（$.state）。 */
+const MODE = { plugin: 'saymend-voice', key: 'mode' } as const
 
 /** 說話後連續靜音多久視為說完（毫秒）：預設值與 `/saymend pause` 可設的範圍。 */
 const DEFAULT_PAUSE_MS = 1500
@@ -47,7 +51,8 @@ const KILLED: ProcessSpawnResult = { code: null, signal: 'SIGTERM' }
 
 const USAGE = [
   '用法：/saymend [listen [edit]]　聽寫一段話並送出（不帶參數就是這個；/listen 是同一個動作）',
-  '　　　/saymend off|speak|loop|stop|status',
+  '　　　/saymend off|speak|loop|stop|status　模式只在這個 session 有效',
+  '　　　/saymend autospeak <on|off>　每個 session 一開始就朗讀回覆',
   '　　　/saymend pause <秒>　　停頓多久視為說完（0.5–10，預設 1.5）',
   '　　　/saymend max <秒>　　　單段最長可以講多久（10–3600，預設 120）',
   '　　　/saymend bargein <on|off>　邊唸邊聽（需戴耳機）',
@@ -73,6 +78,8 @@ let bargeIn = false
 let polish = false
 /** 待命時也把 Saymend 的狀態留在 status line（預設關：只在做事時顯示） */
 let pin = false
+/** 新 session 的起始模式是 speak 而不是 off（預設關） */
+let autoSpeak = false
 let pauseMs = DEFAULT_PAUSE_MS
 let maxSeconds = DEFAULT_MAX_SECONDS
 let isLoaded = false
@@ -103,8 +110,13 @@ async function load($: EngineInterface): Promise<void> {
   if (isLoaded) {
     return
   }
-  const stored = await $.store.get('mode')
-  mode = stored === 'speak' || stored === 'loop' ? stored : 'off'
+  // 0.2 以前模式存在 $.store，開一次所有 session 都跟著開；現在只留在 session 裡
+  if ((await $.store.get('mode')) !== undefined) {
+    await $.store.delete('mode')
+  }
+  autoSpeak = (await $.store.get('autoSpeak')) === true
+  const held = (await $.state.get(MODE)).value
+  mode = held === 'off' || held === 'speak' || held === 'loop' ? held : autoSpeak ? 'speak' : 'off'
   const storedVoice = await $.store.get('voice')
   voice = typeof storedVoice === 'string' && storedVoice !== '' ? storedVoice : undefined
   const storedBin = await $.store.get('bin')
@@ -431,7 +443,7 @@ function startWatcher($: EngineInterface): void {
 
 async function setMode($: EngineInterface, next: Mode): Promise<void> {
   mode = next
-  await $.store.set('mode', next)
+  await $.state.set(MODE, next)
   if (next === 'off') {
     stopSpeaking()
     listening?.cancel()
@@ -512,13 +524,15 @@ function beginListening($: EngineInterface, args: string): { text?: string } {
 export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
+    // 新的 session：模式要重新決定，設定也重讀一次
+    isLoaded = false
     await load($)
     await $.command.register({
       name: 'saymend',
       description:
-        '不帶參數：聽寫一段話並送出（同 /listen）。語音模式：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
+        '不帶參數：聽寫一段話並送出（同 /listen）。語音模式（只在這個 session）：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
       argumentHint:
-        '[listen [edit]|off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off|pin on|off|bin <路徑>|speaker <指令>]',
+        '[listen [edit]|off|speak|loop|stop|status|autospeak on|off|pause <秒>|max <秒>|bargein on|off|polish on|off|pin on|off|bin <路徑>|speaker <指令>]',
       immediate: true,
     })
     await $.command.register({
@@ -547,9 +561,9 @@ export const register: Register = on => {
     if (verb === 'off' || verb === 'speak' || verb === 'loop') {
       await setMode($, verb)
       const note = {
-        off: '語音已關閉。',
-        speak: '之後每次回覆結束會朗讀。',
-        loop: '語音迴圈已開啟：朗讀後自動聆聽，說完自動送出。說「停止語音」可結束迴圈。',
+        off: '這個 session 的語音已關閉。',
+        speak: '這個 session 之後每次回覆結束會朗讀。',
+        loop: '這個 session 的語音迴圈已開啟：朗讀後自動聆聽，說完自動送出。說「停止語音」可結束迴圈。',
       }
 
       return { text: note[verb] }
@@ -614,6 +628,23 @@ export const register: Register = on => {
       }
     }
 
+    if (verb === 'autospeak') {
+      if (value === 'on' || value === 'off') {
+        autoSpeak = value === 'on'
+        await (autoSpeak ? $.store.set('autoSpeak', true) : $.store.delete('autoSpeak'))
+        if (autoSpeak && mode === 'off') {
+          // 開了卻沒聲音會讓人以為沒生效：這個 session 也跟著開始朗讀
+          await setMode($, 'speak')
+        }
+      }
+
+      return {
+        text: autoSpeak
+          ? '每個 session 都朗讀：開。之後新開的 session 會從 speak 開始（已開著的其他 session 要 /reload-plugins 才會跟上）；個別 session 仍可用 /saymend off 關掉。'
+          : '每個 session 都朗讀：關。之後新開的 session 從 off 開始；這個 session 目前的模式不變。',
+      }
+    }
+
     if (verb === 'pin') {
       if (value === 'on' || value === 'off') {
         pin = value === 'on'
@@ -661,7 +692,8 @@ export const register: Register = on => {
     if (verb === 'status') {
       return {
         text: [
-          `模式：${mode}`,
+          `模式：${mode}（只在這個 session 有效）`,
+          `每個 session 都朗讀：${autoSpeak ? '開' : '關'}`,
           `邊唸邊聽：${bargeIn ? '開' : '關'}`,
           `潤飾：${polish ? '開' : '關'}`,
           `常駐狀態列：${pin ? '開' : '關'}`,
