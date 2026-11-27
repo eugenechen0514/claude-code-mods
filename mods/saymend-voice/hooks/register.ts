@@ -47,6 +47,7 @@ const USAGE = [
   '　　　/saymend max <秒>　　　單段最長可以講多久（10–3600，預設 120）',
   '　　　/saymend bargein <on|off>　邊唸邊聽（需戴耳機）',
   '　　　/saymend polish <on|off>　 送出前先經 Saymend 的 LLM 潤飾',
+  '　　　/saymend pin <on|off>　　　待命時也把 Saymend 的狀態留在狀態列',
   '　　　/saymend voice <系統語音名稱|default>',
   '　　　/saymend bin <saymend 路徑|default>',
 ].join('\n')
@@ -59,6 +60,8 @@ let bin = 'saymend'
 let bargeIn = false
 /** 送出前先讓 Saymend 用設定中的 LLM provider 潤飾（`dictate --polish`）。 */
 let polish = false
+/** 待命時也把 Saymend 的狀態留在 status line（預設關：只在做事時顯示） */
+let pin = false
 let pauseMs = DEFAULT_PAUSE_MS
 let maxSeconds = DEFAULT_MAX_SECONDS
 let isLoaded = false
@@ -97,6 +100,7 @@ async function load($: EngineInterface): Promise<void> {
   bin = typeof storedBin === 'string' && storedBin !== '' ? storedBin : 'saymend'
   bargeIn = (await $.store.get('bargeIn')) === true
   polish = (await $.store.get('polish')) === true
+  pin = (await $.store.get('pin')) === true
   pauseMs = within(await $.store.get('pauseMs'), PAUSE_MIN_MS, PAUSE_MAX_MS) ?? DEFAULT_PAUSE_MS
   maxSeconds =
     within(await $.store.get('maxSeconds'), MAX_SECONDS_MIN, MAX_SECONDS_MAX) ??
@@ -123,6 +127,10 @@ function refreshStatus($: EngineInterface): void {
   } else if (BUSY_STATES.has(saymendState)) {
     // 不是這個 mod 發起的聽寫：使用者按了 Saymend 熱鍵
     $.ui.status('Saymend 熱鍵聽寫中…')
+  } else if (pin) {
+    // 常駐：待命時也留一行，看得到 Saymend 連不連得上、目前是哪個語音模式
+    const state = saymendState === 'idle' ? '待命' : saymendState === 'unknown' ? '未連線' : saymendState
+    $.ui.status(`Saymend ${state}｜語音模式 ${mode}`)
   } else {
     $.ui.status(undefined)
   }
@@ -446,7 +454,7 @@ export const register: Register = on => {
       description:
         '不帶參數：聽寫一段話並送出（同 /listen）。語音模式：off／speak（朗讀回覆）／loop（朗讀後自動聆聽並送出）',
       argumentHint:
-        '[listen [edit]|off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off]',
+        '[listen [edit]|off|speak|loop|stop|status|pause <秒>|max <秒>|bargein on|off|polish on|off|pin on|off]',
       immediate: true,
     })
     await $.command.register({
@@ -454,7 +462,7 @@ export const register: Register = on => {
       description: '用 Saymend 聽寫一段話並直接送出（加 edit 只填入輸入框，不送出；同 /saymend listen）',
       argumentHint: '[edit]',
     })
-    if (mode !== 'off') {
+    if (mode !== 'off' || pin) {
       startWatcher($)
     }
     refreshStatus($)
@@ -542,6 +550,24 @@ export const register: Register = on => {
       }
     }
 
+    if (verb === 'pin') {
+      if (value === 'on' || value === 'off') {
+        pin = value === 'on'
+        await $.store.set('pin', pin)
+        if (pin) {
+          // 語音模式關著時原本不監看 Saymend；要常駐顯示就得一直監看
+          startWatcher($)
+        }
+        refreshStatus($)
+      }
+
+      return {
+        text: pin
+          ? '常駐狀態列：開。待命時也會顯示 Saymend 的狀態與語音模式。'
+          : '常駐狀態列：關。只在朗讀、聆聽或熱鍵聽寫時顯示。',
+      }
+    }
+
     if (verb === 'voice') {
       voice = value === '' || value === 'default' ? undefined : value
       await (voice === undefined ? $.store.delete('voice') : $.store.set('voice', voice))
@@ -562,6 +588,7 @@ export const register: Register = on => {
           `模式：${mode}`,
           `邊唸邊聽：${bargeIn ? '開' : '關'}`,
           `潤飾：${polish ? '開' : '關'}`,
+          `常駐狀態列：${pin ? '開' : '關'}`,
           `停頓視為說完：${pauseMs / 1000} 秒`,
           `單段最長：${maxSeconds} 秒`,
           `朗讀語音：${voice ?? '系統預設'}`,

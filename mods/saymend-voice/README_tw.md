@@ -38,6 +38,7 @@ mod 只透過 `saymend` CLI 跟 Saymend 互動，契約見 Saymend repo 的 `doc
 | `/saymend max <秒>` | 單段最長可以講多久（10–3600，預設 120） |
 | `/saymend bargein <on\|off>` | 邊唸邊聽：朗讀時就開麥，開口即打斷（需戴耳機） |
 | `/saymend polish <on\|off>` | 送出前先經 Saymend 設定的 LLM 潤飾 |
+| `/saymend pin <on\|off>` | 待命時也把 Saymend 的狀態與語音模式留在狀態列（預設關：只在朗讀、聆聽或熱鍵聽寫時顯示） |
 | `/saymend voice <名稱\|default>` | 指定朗讀用的系統語音 |
 | `/saymend bin <路徑\|default>` | 指定 `saymend` CLI 的路徑 |
 

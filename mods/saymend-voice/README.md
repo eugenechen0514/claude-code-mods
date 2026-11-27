@@ -38,6 +38,7 @@ The mod talks to Saymend only through the `saymend` CLI; the contract is in `doc
 | `/saymend max <seconds>` | The longest a single utterance can run (10–3600, default 120) |
 | `/saymend bargein <on\|off>` | Barge-in: keep the microphone open while reading, and stop reading when you start speaking (headphones required) |
 | `/saymend polish <on\|off>` | Polish the text with the LLM configured in Saymend before sending |
+| `/saymend pin <on\|off>` | Keep Saymend's state and the voice mode on the status line while idle too (off by default: shown only while reading, listening or hotkey dictation) |
 | `/saymend voice <name\|default>` | Choose the system voice used for reading |
 | `/saymend bin <path\|default>` | Set the path to the `saymend` CLI |
 

@@ -580,3 +580,40 @@ test('邊唸邊聽：朗讀唸完之後聽寫才空手結束，照舊待命不�
   expect(seen.toasts.some(text => text.includes('待命'))).toBe(true)
 })
 
+test('/saymend pin on：待命時也顯示 Saymend 狀態與語音模式；off 時清掉', async ($, on) => {
+  const clock = mock.clock(on)
+  const stream = gate()
+  const seen = world(on, {
+    events: ['{"v":1,"type":"state","state":"idle","source":null}'],
+    hold: stream.promise,
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  // 語音模式關著也要能常駐：pin 會自己開始監看 Saymend
+  const reply = await $.command.run({ ...TYPED, command: 'saymend', args: 'pin on' })
+  await clock.settle()
+  expect(reply.text).toContain('常駐狀態列：開')
+  expect(seen.spawned.some(argv => argv[1] === 'events')).toBe(true)
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜語音模式 off')
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'speak' })
+  await clock.settle()
+  expect(seen.statuses.at(-1)).toBe('Saymend 待命｜語音模式 speak')
+
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'pin off' })
+  await clock.settle()
+  expect(seen.statuses.at(-1)).toBeUndefined()
+  stream.open()
+})
+
+test('/saymend pin on：Saymend 連不上時顯示未連線', async ($, on) => {
+  const clock = mock.clock(on)
+  const seen = world(on)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'pin on' })
+  await clock.settle()
+
+  expect(seen.statuses.at(-1)).toBe('Saymend 未連線｜語音模式 off')
+})
+
