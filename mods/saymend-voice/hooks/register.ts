@@ -32,6 +32,8 @@ const MAX_SECONDS_MAX = 3600
 const NO_SPEECH_SECONDS = 10
 /** 邊唸邊聽時麥克風在朗讀期間就開了：單段上限要多留這段朗讀的時間（秒）。 */
 const BARGE_EXTRA_SECONDS = 480
+/** 邊唸邊聽時，朗讀期間聽寫自己空手結束後最多重開幾次（防止異常時無限重開） */
+const BARGE_MAX_RESTARTS = 30
 /** `saymend events` 斷線後重連的間隔（毫秒），逐次加倍到上限。 */
 const RETRY_MS = 2000
 const RETRY_MAX_MS = 60_000
@@ -166,7 +168,7 @@ async function speak(
  */
 async function listen(
   $: EngineInterface,
-  options: { submit: boolean; handsFree: boolean; overSpeech?: boolean },
+  options: { submit: boolean; handsFree: boolean; overSpeech?: boolean; restarts?: number },
 ): Promise<void> {
   if (listening !== null) {
     return
@@ -276,6 +278,12 @@ async function listen(
   }
 
   if (code === 6 || code === 0) {
+    // 邊唸邊聽時朗讀還沒唸完，聽寫卻空手結束：多半是環境聲音被當成開口、接著靜音就定稿了。
+    // 這時不能待命，否則朗讀後半段開口沒人聽；重開一段繼續聽。
+    const restarts = options.restarts ?? 0
+    if (isOverSpeech && speaking !== null && mode === 'loop' && restarts < BARGE_MAX_RESTARTS) {
+      return listen($, { ...options, restarts: restarts + 1 })
+    }
     $.ui.toast(
       options.handsFree
         ? '沒聽到聲音，語音迴圈待命中。輸入 /listen 繼續'
@@ -380,10 +388,11 @@ async function afterTurn($: EngineInterface, answer: string): Promise<void> {
   if (mode === 'loop' && bargeIn && text !== '') {
     // 邊唸邊聽：先開麥再開始唸，使用者隨時開口都能打斷
     const heard = listen($, { submit: true, handsFree: true, overSpeech: true })
-    const handle = listening
     await speak($, text)
-    if (handle !== null && listening === handle && !handle.hasSpoken) {
-      armNoSpeech($, handle)
+    // 朗讀期間聽寫可能重開過，所以看的是「現在這一段」而不是一開始那一段
+    const current = listening
+    if (current !== null && !current.hasSpoken) {
+      armNoSpeech($, current)
     }
     await heard
 

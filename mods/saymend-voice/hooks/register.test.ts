@@ -80,6 +80,8 @@ function world(
   on: On,
   script: {
     dictate?: { lines: string[]; code: number }
+    /** 依序給每一次 `saymend dictate` 用的結果；用完之後回到 `dictate` */
+    dictateSequence?: { lines: string[]; code: number }[]
     events?: string[]
     /** events 串流吐完行之後，等到這個 promise 完成才結束（模擬連線持續開著） */
     hold?: Promise<void>
@@ -161,11 +163,12 @@ function world(
       yield { stream: 'stdout' as const, text: '{"v":1,"type":"started"}\n' }
       await script.dictateHold
     }
-    for (const line of script.dictate?.lines ?? []) {
+    const result = script.dictateSequence?.shift() ?? script.dictate
+    for (const line of result?.lines ?? []) {
       yield { stream: 'stdout' as const, text: `${line}\n` }
     }
 
-    return { value: { code: script.dictate?.code ?? 0, signal: null } }
+    return { value: { code: result?.code ?? 0, signal: null } }
   })
 
   return seen
@@ -534,3 +537,46 @@ test('/saymend 不帶參數與 /saymend listen 都等同 /listen；listen edit �
   const status = await $.command.run({ ...TYPED, command: 'saymend', args: 'status' })
   expect(status.text).toContain('模式：off')
 })
+
+test('邊唸邊聽：朗讀還沒唸完聽寫就空手結束時，重開一段繼續聽，不待命', async ($, on) => {
+  const clock = mock.clock(on)
+  const speech = gate()
+  const seen = world(on, {
+    speakHold: speech.promise,
+    dictateSequence: [
+      // 第一段：環境聲音被當成開口，接著靜音就定稿，結果是空的
+      { lines: ['{"v":1,"type":"error","code":"empty_result","message":"辨識結果為空"}'], code: 6 },
+      { lines: ['{"v":1,"type":"final","text":"等一下"}'], code: 0 },
+    ],
+  })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'bargein on' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
+  await $.turn.complete({ ...TURN, answer: '這是一段很長的回覆。' })
+  await clock.settle()
+
+  expect(seen.spawned.filter(argv => argv[1] === 'dictate')).toHaveLength(2)
+  expect(seen.toasts.some(text => text.includes('待命'))).toBe(false)
+  expect(seen.cutOff).toBe(1)
+  expect(seen.submitted).toEqual([{ text: '等一下', asUser: true }])
+  speech.open()
+})
+
+test('邊唸邊聽：朗讀唸完之後聽寫才空手結束，照舊待命不重開', async ($, on) => {
+  const clock = mock.clock(on)
+  const mic = gate()
+  const seen = world(on, { dictateHold: mic.promise, dictate: { lines: [], code: 6 } })
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'bargein on' })
+  await $.command.run({ ...TYPED, command: 'saymend', args: 'loop' })
+  await $.turn.complete({ ...TURN, answer: '已完成。' })
+  await clock.settle()
+  mic.open()
+  await clock.settle()
+
+  expect(seen.spawned.filter(argv => argv[1] === 'dictate')).toHaveLength(1)
+  expect(seen.toasts.some(text => text.includes('待命'))).toBe(true)
+})
+
